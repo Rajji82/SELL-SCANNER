@@ -1,425 +1,625 @@
 <!DOCTYPE html>
-<html lang="hi">
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#14181f">
-<title>Pro Option Sell Scanner & Bot</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>AlphaOption Pro | Scanner & Auto-Trading Bot</title>
 <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#eef1f5;--card:#fff;--ink:#1b2330;--mute:#667085;--line:#dde2ea;--ok:#1f7a45;--warn:#b45f06;--accent:#2f4bb8;color-scheme:light}
-@media (prefers-color-scheme:dark){:root{--bg:#14181f;--card:#1d232d;--ink:#e8ecf3;--mute:#98a2b3;--line:#2c3441;--ok:#4cc38a;--warn:#f0a53c;--accent:#8aa4ff;color-scheme:dark}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif;padding:max(14px,env(safe-area-inset-top)) 14px 40px}
-h1{font-size:20px;margin:0 0 12px}
-h2{font-size:16px;margin:18px 0 10px}
-.bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
-input,select,button{font:inherit;border-radius:8px;border:1px solid var(--line);padding:10px 12px;background:var(--card);color:var(--ink)}
-input{flex:1 1 200px}
-button{background:var(--accent);color:#fff;border:0;font-weight:600;cursor:pointer}
-button:disabled{opacity:.6}
-.sym{margin:18px 0 8px;display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap}
-.sym b{font-size:17px}.mute{color:var(--mute);font-size:13px}
-.warn{color:var(--warn);font-size:13px;margin:4px 0}
-.opt{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
-.top{display:flex;justify-content:space-between;gap:8px;font-weight:600;align-items:center}
-.pop{height:8px;border-radius:4px;background:var(--line);margin:8px 0;overflow:hidden}
-.pop i{display:block;height:100%;background:var(--ok)}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:3px 12px;font-size:13px}
-.grid span{color:var(--mute)}
-.err{color:var(--warn)}
-button#auto{background:var(--ok);color:#fff}
-@media (prefers-color-scheme:dark){button#auto{color:#0b1b12}}
-.note{margin-top:20px;font-size:12px;color:var(--mute)}
-
-/* Badges & Buttons */
-.badge-group{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0;align-items:center}
-.badge{padding:2px 6px;border-radius:4px;font-size:11px;font-weight:bold}
-.badge-hot{background:#ffebee;color:#c62828}
-.badge-cold{background:#fff3e0;color:#ef6c00}
-.badge-sd{background:#e8f5e9;color:#2e7d32}
-.badge-tech{background:#e3f2fd;color:#1565c0}
-.badge-pot{background:#f3e5f5;color:#7b1fa2}
-.badge-spread{background:#fff8e1;color:#f57f17;border:1px dashed #fbc02d}
-.btn-chart{padding:3px 8px;font-size:11px;border-radius:4px;background:var(--card);color:var(--accent);border:1px solid var(--accent);cursor:pointer;margin-left:auto}
-.btn-trade{padding:4px 10px;font-size:12px;border-radius:6px;background:var(--ok);color:#fff;border:0;cursor:pointer}
-
-@media (prefers-color-scheme:dark){
-  .badge-hot{background:#441a1d;color:#ff8a80}
-  .badge-cold{background:#3e2723;color:#ffb74d}
-  .badge-sd{background:#1b3824;color:#81c784}
-  .badge-tech{background:#182b49;color:#90caf9}
-  .badge-pot{background:#381c3d;color:#ce93d8}
-  .badge-spread{background:#302914;color:#ffd54f;border:1px dashed #fbc02d}
+:root {
+  --bg: #0b0e14;
+  --panel: #121824;
+  --card: #182030;
+  --border: #232d42;
+  --border-light: #2d3b55;
+  --ink: #f0f4fc;
+  --mute: #8e9bb5;
+  --accent: #3861fb;
+  --accent-glow: rgba(56, 97, 251, 0.25);
+  --ok: #0ecb81;
+  --ok-bg: rgba(14, 203, 129, 0.12);
+  --danger: #f6465d;
+  --danger-bg: rgba(246, 70, 93, 0.12);
+  --warn: #f5a623;
+  --warn-bg: rgba(245, 166, 35, 0.12);
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
 }
 
-.chart-container{margin-top:10px;height:340px;border-radius:8px;overflow:hidden;border:1px solid var(--line);display:none}
-.news-box{background:rgba(100,100,100,0.08);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:12px}
-.news-title{font-weight:600;margin-bottom:4px;color:var(--accent)}
-.news-box ul{margin:0;padding-left:18px}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  padding-bottom: 60px;
+}
 
-/* Automated Trading Bot Control Box */
-.bot-box{background:var(--card);border:2px solid var(--accent);border-radius:12px;padding:14px;margin-bottom:16px}
-.bot-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
-.bot-controls{display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:8px;margin-top:10px}
-.bot-controls label{font-size:11px;color:var(--mute);display:block;margin-bottom:3px}
-.live-pnl-card{margin-top:10px;padding:12px;border-radius:8px;background:rgba(31,122,69,0.1);border:1px solid var(--ok);display:none}
+header {
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 20px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 16px; letter-spacing: -0.5px; }
+.brand-badge { background: linear-gradient(135deg, var(--accent), #7928ca); padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; color: #fff; }
+.market-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--mute); font-family: var(--font-mono); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok); }
 
-.bt-box{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:14px;margin-top:24px}
-.bt-grid{display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:10px}
-.bt-field label{display:block;font-size:12px;color:var(--mute);margin-bottom:4px}
-.bt-field input,.bt-field select{width:100%}
-#bt_result{margin-top:12px;display:none;padding:12px;border-radius:8px;font-size:14px;line-height:1.5}
+.container { max-width: 1200px; margin: 0 auto; padding: 16px; }
+
+/* KPI Grid */
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.kpi-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; position: relative; overflow: hidden; }
+.kpi-card::before { content:''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--border-light); }
+.kpi-card.success::before { background: var(--ok); }
+.kpi-card.danger::before { background: var(--danger); }
+.kpi-card.accent::before { background: var(--accent); }
+.kpi-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--mute); font-weight: 600; margin-bottom: 4px; }
+.kpi-val { font-size: 20px; font-weight: 800; font-family: var(--font-mono); display: flex; align-items: baseline; gap: 6px; }
+
+/* Tabs */
+.tab-bar { display: flex; gap: 6px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+.tab-btn {
+  background: transparent; border: none; color: var(--mute); font-family: var(--font-sans);
+  padding: 10px 18px; font-size: 13px; font-weight: 600; cursor: pointer; position: relative;
+}
+.tab-btn:hover { color: var(--ink); }
+.tab-btn.active { color: var(--ink); }
+.tab-btn.active::after {
+  content: ''; position: absolute; bottom: -1px; left: 0; right: 0; height: 2px;
+  background: var(--accent); box-shadow: 0 -2px 8px var(--accent);
+}
+
+/* Toolbar */
+.toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; background: var(--panel); padding: 12px; border-radius: 12px; border: 1px solid var(--border); }
+.input-group { flex: 1 1 240px; }
+input, select {
+  width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--ink); font-family: var(--font-sans); font-size: 13px; padding: 10px 14px;
+  outline: none;
+}
+input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+.btn {
+  background: var(--accent); color: #fff; border: none; border-radius: 8px;
+  padding: 10px 16px; font-weight: 600; font-size: 13px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+}
+.btn-success { background: var(--ok); color: #000; }
+.btn-danger { background: var(--danger); }
+.btn-outline { background: transparent; border: 1px solid var(--border-light); color: var(--ink); }
+
+/* Bot Dock */
+.bot-dock {
+  background: linear-gradient(180deg, var(--panel), #141b29); border: 1px solid var(--border);
+  border-radius: 14px; padding: 18px; margin-bottom: 24px; box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+}
+.bot-dock-top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.bot-switch-group { display: flex; align-items: center; gap: 14px; }
+.switch-label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.switch-label input { width: 16px; height: 16px; accent-color: var(--ok); cursor: pointer; }
+.bot-params-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 14px; }
+.param-box label { font-size: 11px; color: var(--mute); font-weight: 600; text-transform: uppercase; margin-bottom: 4px; display: block; }
+
+.active-pos-box {
+  background: rgba(14, 203, 129, 0.05); border: 1px solid rgba(14, 203, 129, 0.3);
+  border-radius: 10px; padding: 14px; margin-top: 14px; display: none;
+}
+.active-pos-header { display: flex; justify-content: space-between; align-items: center; }
+.live-pnl-pill { font-family: var(--font-mono); font-size: 22px; font-weight: 800; }
+
+.kill-switch-active {
+  background: var(--danger-bg); border: 1px solid var(--danger); color: #ff8595;
+  padding: 12px 16px; border-radius: 10px; margin-top: 14px; display: none;
+  justify-content: space-between; align-items: center; font-weight: 600;
+}
+
+/* Cards */
+.cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; }
+.opp-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px; display: flex; flex-direction: column; gap: 12px; position: relative;
+}
+.opp-top { display: flex; justify-content: space-between; align-items: baseline; }
+.opp-title { font-size: 16px; font-weight: 700; font-family: var(--font-mono); }
+.opp-pop { font-size: 13px; font-weight: 700; color: var(--ok); font-family: var(--font-mono); }
+
+.tag-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag { font-size: 10.5px; font-weight: 700; padding: 3px 8px; border-radius: 6px; text-transform: uppercase; }
+.tag-hot { background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(246,70,93,0.3); }
+.tag-safe { background: var(--ok-bg); color: var(--ok); border: 1px solid rgba(14,203,129,0.3); }
+.tag-blue { background: rgba(56, 97, 251, 0.15); color: #7997fc; border: 1px solid rgba(56,97,251,0.3); }
+
+.pop-bar { height: 4px; background: var(--card); border-radius: 2px; overflow: hidden; }
+.pop-fill { height: 100%; background: var(--ok); border-radius: 2px; }
+
+.specs-table { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; font-size: 12px; font-family: var(--font-mono); }
+.specs-table span { color: var(--mute); font-family: var(--font-sans); }
+
+.hedge-strip {
+  background: var(--card); border: 1px dashed var(--border-light); border-radius: 8px;
+  padding: 8px 10px; font-size: 11.5px;
+}
+.news-ticker {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 14px; margin-bottom: 16px; font-size: 12.5px; color: var(--mute);
+}
+.news-ticker b { color: var(--ink); }
+.tv-frame-wrap { height: 360px; border-radius: 8px; overflow: hidden; margin-top: 10px; display: none; border: 1px solid var(--border); }
+
+/* SEBI Modal */
+.modal-overlay {
+  display: flex; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 9999;
+  padding: 16px; overflow-y: auto; align-items: center; justify-content: center;
+}
+.modal-box {
+  background: var(--card); max-width: 600px; width: 100%; border-radius: 14px;
+  border: 1px solid var(--border-light); padding: 22px; box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+}
 </style>
 </head>
 <body>
-<h1>Option Sell Scanner & Bot</h1>
 
-<!-- Automated Bot Controller -->
-<div class="bot-box">
-  <div class="bot-header">
-    <span style="font-size:16px;font-weight:700;">🤖 Auto-Trading Bot Panel</span>
-    <div>
-      <label><input type="checkbox" id="bot_paper" checked> 📄 <b>Paper Trade (Virtual)</b></label>
-      <label style="margin-left:12px;"><input type="checkbox" id="bot_toggle"> ⚡ <b>Enable Bot</b></label>
+<!-- SEBI Statutory Advisory & Terms Acceptance Modal -->
+<div id="terms_modal" class="modal-overlay" style="display:none;">
+  <div class="modal-box">
+    <div style="display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);padding-bottom:12px;margin-bottom:12px;">
+      <span style="font-size:22px;">⚖️</span>
+      <h2 style="color:var(--danger);font-size:16px;font-weight:700;">SEBI Statutory Advisory & Risk Disclosure</h2>
     </div>
+    <div style="background:var(--danger-bg);border-left:3px solid var(--danger);padding:8px 12px;border-radius:6px;font-size:12px;line-height:1.5;margin-bottom:12px;">
+      <b>⚠️ SEBI Study on F&O Trading:</b> 9 out of 10 individual traders in equity F&O incur net losses. Option selling carries substantial capital risk.
+    </div>
+    <div style="font-size:12.5px;color:var(--mute);line-height:1.5;max-height:180px;overflow-y:auto;padding-right:6px;margin-bottom:14px;">
+      <p style="margin-bottom:8px;">1. <b>Non-Advisory Tool:</b> यह केवल एक तकनीकी विश्लेषण और ऑटोमेशन सॉफ्टवेयर है। हम कोई सेबी रजिस्टर्ड एडवाइजर (RA/IA) नहीं हैं।</p>
+      <p style="margin-bottom:8px;">2. <b>Execution Responsibility:</b> सभी ट्रेड यूजर के अपने एंजल वन खाते में होते हैं। किसी भी नुकसान या स्लिपेज के लिए यूजर स्वयं जिम्मेदार है।</p>
+      <p>3. <b>No Guaranteed Return:</b> पिछला डेटा भविष्य के मुनाफे की कोई गारंटी नहीं देता।</p>
+    </div>
+    <label style="font-size:12px;display:flex;gap:8px;align-items:flex-start;cursor:pointer;margin-bottom:16px;">
+      <input type="checkbox" id="chk_terms" style="margin-top:2px;">
+      <span>मैंने सेबी की वैधानिक चेतावनी पढ़ ली है और मैं नियमों को स्वीकार करता/करती हूँ।</span>
+    </label>
+    <button id="btn_terms" class="btn btn-success" style="width:100%;padding:12px;opacity:0.5;cursor:not-allowed;" disabled onclick="acceptTerms()">स्वीकार करें और शुरू करें (Accept & Continue)</button>
   </div>
-  <div class="bot-controls">
-    <div>
-      <label>Target Profit (₹)</label>
-      <input type="number" id="bot_target" value="1500" step="100">
-    </div>
-    <div>
-      <label>Trail SL to Cost at (₹)</label>
-      <input type="number" id="bot_trail" value="1000" step="100">
-    </div>
-    <div>
-      <label>Time Exit (24hr)</label>
-      <input type="text" id="bot_time" value="15:20">
-    </div>
-    <div style="display:flex;align-items:flex-end;">
-      <button onclick="saveBotSettings()" style="width:100%;padding:10px;">Save Settings</button>
-    </div>
-  </div>
-  
-  <div id="live_trade_box" class="live-pnl-card">
-    <div style="display:flex;justify-content:space-between;align-items:center;">
-      <b id="live_contract">-</b>
-      <button onclick="closeTradeNow()" style="background:#dc3545;padding:4px 8px;font-size:11px;">Square-Off</button>
-    </div>
-    <div style="font-size:20px;font-weight:800;margin:6px 0;" id="live_pnl_val">₹0.00</div>
-    <div style="font-size:12px;color:var(--mute);" id="live_details">Entry: - | LTP: - | SL: -</div>
-  </div>
-  <div id="bot_log" style="font-size:11px;color:var(--mute);margin-top:8px;">Bot Idle.</div>
 </div>
 
-<div class="bar">
-  <input id="syms" value="NIFTY,BANKNIFTY,RELIANCE,HDFCBANK" aria-label="Symbols, comma se alag">
-  <button id="go">Scan karo</button>
-  <button id="auto">Auto scan</button>
-</div>
-<div id="out" class="mute">Symbols likhkar "Scan karo" dabao. Stocks mein 1 symbol ~5 second leta hai.</div>
+<header>
+  <div class="brand">
+    <span class="brand-badge">PRO</span>
+    <span>AlphaOption Bot</span>
+  </div>
+  <div class="market-status">
+    <div class="status-dot"></div>
+    <span id="market_clock">09:15:00 IST</span>
+    <span style="color:var(--border-light);">|</span>
+    <span id="bot_status_txt">Connected</span>
+  </div>
+</header>
 
-<!-- Backtest & P&L Calculator Section -->
-<div class="bt-box">
-  <h2 style="margin-top:0;">Option Sell Historical Backtest & P&L</h2>
-  <div class="bt-grid">
-    <div class="bt-field">
-      <label>Symbol / Share</label>
-      <input type="text" id="bt_symbol" value="LUPIN" placeholder="e.g. LUPIN, NIFTY">
+<div class="container">
+
+  <!-- KPI Metrics Ribbon -->
+  <div class="kpi-grid">
+    <div class="kpi-card success">
+      <div class="kpi-label">Today's Realized P&L</div>
+      <div class="kpi-val" id="kpi_pnl">₹0.00</div>
     </div>
-    <div class="bt-field">
-      <label>Strike Price</label>
-      <input type="number" id="bt_strike" placeholder="e.g. 2000">
+    <div class="kpi-card accent">
+      <div class="kpi-label">Trades Executed</div>
+      <div class="kpi-val" id="kpi_trades">0 <span style="font-size:12px;color:var(--mute);font-weight:400;">orders</span></div>
     </div>
-    <div class="bt-field">
-      <label>Option Type</label>
-      <select id="bt_type">
-        <option value="CE">Call (CE)</option>
-        <option value="PE">Put (PE)</option>
-      </select>
+    <div class="kpi-card">
+      <div class="kpi-label">Active Mode</div>
+      <div class="kpi-val" id="kpi_mode" style="font-size:16px;color:var(--ok);">PAPER MODE</div>
     </div>
-    <div class="bt-field">
-      <label>Sell Premium (₹)</label>
-      <input type="number" id="bt_premium" step="0.05" placeholder="e.g. 43">
-    </div>
-    <div class="bt-field">
-      <label>Expiry Date (Backtest)</label>
-      <input type="date" id="bt_date">
-    </div>
-    <div class="bt-field">
-      <label>Lot Size</label>
-      <input type="number" id="bt_lot" value="425" placeholder="e.g. 425">
-    </div>
-    <div class="bt-field">
-      <label>Ya Manual Spot (Optional)</label>
-      <input type="number" id="bt_expiry" step="0.05" placeholder="e.g. 1980">
+    <div class="kpi-card danger">
+      <div class="kpi-label">Kill Switch Threshold</div>
+      <div class="kpi-val" id="kpi_kill">₹2,000</div>
     </div>
   </div>
-  <button onclick="runBacktest()" style="margin-top:12px;width:100%;">Check Historical Profit / Loss</button>
-  <div id="bt_result"></div>
-</div>
 
-<p class="note">POP delta se nikala gaya andaaza hai. Paper Trading mode mein koi asli order nahi lagta. Stop-loss sirf suggestion hai.</p>
+  <!-- Bot Command Center -->
+  <div class="bot-dock">
+    <div class="bot-dock-top">
+      <div>
+        <h2 style="font-size:15px;font-weight:700;">⚡ Algorithmic Bot Controller</h2>
+        <p style="font-size:12px;color:var(--mute);margin-top:2px;">Target-based theta harvest with auto risk-off rules</p>
+      </div>
+      <div class="bot-switch-group">
+        <label class="switch-label">
+          <input type="checkbox" id="bot_paper" checked>
+          <span>Paper Trade (Virtual)</span>
+        </label>
+        <label class="switch-label" style="color:var(--accent);">
+          <input type="checkbox" id="bot_toggle">
+          <span>Enable Bot</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="bot-params-grid">
+      <div class="param-box">
+        <label>Target Profit (₹)</label>
+        <input type="number" id="bot_target" value="1000" step="100">
+      </div>
+      <div class="param-box">
+        <label>Per-Trade SL (₹)</label>
+        <input type="number" id="bot_tradesl" value="1200" step="100">
+      </div>
+      <div class="param-box">
+        <label>Daily Kill Limit (₹)</label>
+        <input type="number" id="bot_kill" value="2000" step="200">
+      </div>
+      <div class="param-box">
+        <label>Trail SL At (₹)</label>
+        <input type="number" id="bot_trail" value="1000" step="100">
+      </div>
+      <div class="param-box">
+        <label>Square-off Time</label>
+        <input type="text" id="bot_time" value="15:20">
+      </div>
+      <div class="param-box" style="display:flex;align-items:flex-end;">
+        <button class="btn btn-outline" style="width:100%;" onclick="saveBotSettings()">Save Rules</button>
+      </div>
+    </div>
+
+    <!-- Kill Switch Trigger State -->
+    <div id="kill_banner" class="kill-switch-active">
+      <span id="kill_msg">🚨 KILL SWITCH LOCKED: Daily Loss Threshold Reached.</span>
+      <button class="btn btn-outline" style="padding:4px 10px;font-size:11px;" onclick="unlockKillSwitch()">Force Override</button>
+    </div>
+
+    <!-- Active Trade Floating Banner -->
+    <div id="live_trade_box" class="active-pos-box">
+      <div class="active-pos-header">
+        <div>
+          <span class="tag tag-safe" id="live_tag">PAPER POSITION</span>
+          <b id="live_contract" style="font-size:15px;margin-left:8px;font-family:var(--font-mono);">-</b>
+        </div>
+        <button class="btn btn-danger" style="padding:5px 12px;font-size:12px;" onclick="closeTradeNow()">Instant Square-Off</button>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:8px;">
+        <div class="live-pnl-pill" id="live_pnl_val">+₹0.00</div>
+        <div style="font-size:12px;color:var(--mute);font-family:var(--font-mono);" id="live_details">Entry: - | LTP: - | SL: -</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tabs Navigation -->
+  <div class="tab-bar">
+    <button class="tab-btn active" id="tab_scan" onclick="switchTab('scanner')">Live Opportunities</button>
+    <button class="tab-btn" id="tab_bt" onclick="switchTab('backtest')">Historical Backtester</button>
+  </div>
+
+  <!-- TAB 1: SCANNER -->
+  <div id="view_scanner">
+    <div class="toolbar">
+      <div class="input-group">
+        <input type="text" id="syms" value="NIFTY,BANKNIFTY,RELIANCE,HDFCBANK" placeholder="Enter symbols...">
+      </div>
+      <button class="btn" id="go" onclick="scan()">Scan Opportunities</button>
+      <button class="btn btn-success" id="auto" onclick="auto(true)">Full F&O Auto-Sweep</button>
+    </div>
+
+    <div id="news_container"></div>
+    <div id="out" class="cards-grid"></div>
+  </div>
+
+  <!-- TAB 2: BACKTEST -->
+  <div id="view_backtest" style="display:none;">
+    <div class="bot-dock" style="background:var(--panel);">
+      <h3 style="margin-bottom:12px;font-size:15px;font-weight:700;">Historical Option P&L Simulation</h3>
+      <div class="bot-params-grid" style="grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));">
+        <div class="param-box">
+          <label>Symbol</label>
+          <input type="text" id="bt_symbol" value="NIFTY">
+        </div>
+        <div class="param-box">
+          <label>Strike</label>
+          <input type="number" id="bt_strike" placeholder="23500">
+        </div>
+        <div class="param-box">
+          <label>Type</label>
+          <select id="bt_type">
+            <option value="PE">PUT (PE)</option>
+            <option value="CE">CALL (CE)</option>
+          </select>
+        </div>
+        <div class="param-box">
+          <label>Sell Premium (₹)</label>
+          <input type="number" id="bt_premium" step="0.05" placeholder="50.0">
+        </div>
+        <div class="param-box">
+          <label>Expiry Date</label>
+          <input type="date" id="bt_date">
+        </div>
+        <div class="param-box">
+          <label>Lot Size</label>
+          <input type="number" id="bt_lot" value="65">
+        </div>
+      </div>
+      <button class="btn" style="margin-top:14px;width:100%;" onclick="runBacktest()">Run Simulation</button>
+      <div id="bt_result" style="margin-top:14px;padding:12px;border-radius:8px;display:none;font-family:var(--font-mono);font-size:13px;"></div>
+    </div>
+  </div>
+
+  <!-- Legal Footer -->
+  <div style="margin-top:40px;padding:16px 0;border-top:1px solid var(--border);font-size:11.5px;color:var(--mute);text-align:center;line-height:1.6;">
+    <b>SEBI Statutory Regulatory Disclaimer:</b> This software is for technical analysis and workflow automation purposes only. The platform does not offer investment advisory or tips. F&O trading carries high capital risk.
+  </div>
+
+</div>
 
 <script>
-const $=id=>document.getElementById(id);
-const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-let key=localStorage.getItem("key")||"";
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let key = localStorage.getItem("key") || "";
 
-async function scan(){
-  $("go").disabled=true;$("out").textContent="Scan ho raha hai...";
-  try{
-    const r=await fetch("/api/scan?symbols="+encodeURIComponent($("syms").value),{headers:{"x-key":key}});
-    if(r.status===401){key=prompt("App password daalo")||"";localStorage.setItem("key",key);return scan();}
-    render(await r.json());
-  }catch(e){$("out").innerHTML='<span class="err">Server se connect nahi hua. Check karo scanner chal raha hai.</span>';}
-  $("go").disabled=false;
+// SEBI Modal Logic
+if (!localStorage.getItem("terms_ok")) {
+  $('terms_modal').style.display = "flex";
 }
+$('chk_terms')?.addEventListener('change', function() {
+  const btn = $('btn_terms');
+  btn.disabled = !this.checked;
+  btn.style.opacity = this.checked ? "1" : "0.5";
+  btn.style.cursor = this.checked ? "pointer" : "not-allowed";
+});
+function acceptTerms() {
+  localStorage.setItem("terms_ok", "true");
+  $('terms_modal').style.display = "none";
+}
+
+function switchTab(t) {
+  $('tab_scan').classList.toggle('active', t === 'scanner');
+  $('tab_bt').classList.toggle('active', t === 'backtest');
+  $('view_scanner').style.display = t === 'scanner' ? 'block' : 'none';
+  $('view_backtest').style.display = t === 'backtest' ? 'block' : 'none';
+}
+
+setInterval(() => {
+  const d = new Date();
+  $('market_clock').textContent = d.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }) + " IST";
+}, 1000);
 
 let cardCounter = 0;
-
-function card(p, sym){
+function card(p, sym) {
   cardCounter++;
   const cId = "tv_chart_" + cardCounter;
-  let badges = [];
-  if(p.ivr >= 50) badges.push('<span class="badge badge-hot">🔥 High IVR '+p.ivr+'%</span>');
-  else if(p.ivr < 25) badges.push('<span class="badge badge-cold">⚠️ Low IVR '+p.ivr+'%</span>');
-  
-  if(p.is_outside_sd) badges.push('<span class="badge badge-sd">🛡️ Outside 1-SD Safe</span>');
-  if(p.tech_note) badges.push('<span class="badge badge-tech">📈 '+esc(p.tech_note)+'</span>');
-  badges.push('<span class="badge badge-pot">⚡ POT: '+p.pot+'%</span>');
-
   const pickData = JSON.stringify(p).replace(/"/g, '&quot;');
+  
+  let tags = [];
+  if (p.ivr >= 50) tags.push('<span class="tag tag-hot">🔥 High IVR '+p.ivr+'%</span>');
+  if (p.is_outside_sd) tags.push('<span class="tag tag-safe">🛡️ Safe 1-SD</span>');
+  if (p.tech_note) tags.push('<span class="tag tag-blue">'+esc(p.tech_note)+'</span>');
 
-  return '<div class="opt"><div class="top"><span>SELL '+esc(p.contract)+' @ '+p.ltp+'</span><span>POP '+p.pop+'%</span></div>'
-  +'<div class="badge-group">' + badges.join("") 
-  + '<button class="btn-chart" onclick="toggleChart(\''+cId+'\', \''+esc(sym)+'\')">📊 Chart</button>'
-  + '<button class="btn-trade" onclick="botTradeNow('+pickData+')">⚡ Bot Trade</button>'
-  +'</div>'
-  +'<div class="pop"><i style="width:'+p.pop+'%"></i></div><div class="grid">'
-  +'<div><span>Premium/lot </span>₹'+p.premium_lot+'</div><div><span>Lot </span>'+p.lot+'</div>'
-  +'<div><span>Stop-loss </span>'+p.sl_price+'</div><div><span>SL par nuksaan </span>₹'+p.loss_at_sl+'</div>'
-  +'<div><span>Breakeven </span>'+p.breakeven+'</div><div><span>Spot se door </span>'+p.dist_pct+'%</div>'
-  +'<div><span>Expected Move </span>±₹'+p.exp_move+'</div><div><span>Touch Risk (POT) </span>'+p.pot+'%</div>'
-  +'<div><span>IV / IVP </span>'+esc(p.iv)+' / '+p.ivp+'%</div><div><span>Spread </span>'+p.spread_pct+'%</div>'
-  +'</div>'
-  +'<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);">'
-  +'<span class="badge badge-spread">🛡️ Hedge Credit Spread: BUY '+p.hedge_strike+' '+p.type+'</span>'
-  +'<div class="grid" style="margin-top:4px;">'
-  +'<div><span>Net Credit: </span>₹'+p.net_credit+'/sh</div><div><span>Max Profit: </span>₹'+p.spread_profit+'</div>'
-  +'<div><span>Max Capped Loss: </span>₹'+p.spread_loss+'</div><div><span>Margin Benefit: </span>~70% OFF</div>'
-  +'</div></div>'
-  +'<div id="'+cId+'" class="chart-container"></div>'
-  +'</div>';
+  return `
+  <div class="opp-card">
+    <div class="opp-top">
+      <div class="opp-title">SELL ${esc(p.contract)} @ ₹${p.ltp}</div>
+      <div class="opp-pop">${p.pop}% POP</div>
+    </div>
+    
+    <div class="pop-bar"><div class="pop-fill" style="width:${p.pop}%"></div></div>
+    <div class="tag-row">${tags.join("")}</div>
+
+    <div class="specs-table">
+      <div><span>Prem/Lot:</span> ₹${p.premium_lot}</div>
+      <div><span>Lot Size:</span> ${p.lot}</div>
+      <div><span>Stop-Loss:</span> ₹${p.sl_price}</div>
+      <div><span>Max Loss:</span> ₹${p.loss_at_sl}</div>
+      <div><span>Dist from Spot:</span> ${p.dist_pct}%</div>
+      <div><span>Exp Move:</span> ±₹${p.exp_move}</div>
+      <div><span>IV / IVP:</span> ${p.iv}% / ${p.ivp}%</div>
+      <div><span>POT Touch:</span> ${p.pot}%</div>
+    </div>
+
+    <div class="hedge-strip">
+      <div style="display:flex;justify-content:space-between;color:var(--mute);margin-bottom:2px;">
+        <span>Hedge Leg: BUY ${p.hedge_strike} ${p.type}</span>
+        <span style="color:var(--ok);font-weight:700;">70% Margin OFF</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-family:var(--font-mono);">
+        <span>Net Credit: ₹${p.net_credit}</span>
+        <span>Capped Loss: ₹${p.spread_loss}</span>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:4px;">
+      <button class="btn btn-outline" style="flex:1;padding:7px;" onclick="toggleChart('${cId}', '${esc(sym)}')">📊 Chart</button>
+      <button class="btn btn-success" style="flex:1;padding:7px;" onclick="botTradeNow(${pickData})">⚡ Bot Trade</button>
+    </div>
+
+    <div id="${cId}" class="tv-frame-wrap"></div>
+  </div>`;
 }
 
-function render(d){
-  let h='<div class="mute">Update: '+esc(d.time)+'</div>';
-  for(const s of d.results){
-    if(s.error){h+='<div class="sym"><b>'+esc(s.symbol)+'</b></div><div class="err">'+esc(s.error)+'</div>';continue;}
-    let pcrColor = s.pcr > 1 ? 'var(--ok)' : (s.pcr < 0.7 ? 'var(--warn)' : 'var(--ink)');
-    h+='<div class="sym"><b>'+esc(s.symbol)+' '+s.spot+'</b>'
-      +'<span class="mute">Expiry '+esc(s.expiry)+' ('+s.days+' din) | 20 EMA: ₹'+(s.ema20||'-')
-      +' | PCR: <b style="color:'+pcrColor+'">'+s.pcr+'</b> | Max Pain: <b>₹'+s.max_pain+'</b></span></div>';
-    
-    if(s.headlines && s.headlines.length){
-      h+='<div class="news-box"><div class="news-title">📰 Latest Market News:</div><ul>';
-      for(const hl of s.headlines) h+='<li>'+esc(hl)+'</li>';
-      h+='</ul></div>';
-    }
+function render(d) {
+  let cardsHtml = '';
+  let newsHtml = '';
 
-    for(const w of s.warnings) h+='<div class="warn">'+esc(w)+'</div>';
-    if(!s.picks.length) h+='<div class="mute">Filter ke hisaab se koi achha strike nahi mila.</div>';
-    for(const p of s.picks) h+=card(p, s.symbol);
+  for (const s of d.results) {
+    if (s.headlines && s.headlines.length && !newsHtml) {
+      newsHtml = `<div class="news-ticker"><b>Latest News Catalyst:</b> ${esc(s.headlines[0])}</div>`;
+    }
+    if (s.picks) {
+      for (const p of s.picks) cardsHtml += card(p, s.symbol);
+    }
   }
-  $("out").innerHTML=h;
+
+  $('news_container').innerHTML = newsHtml;
+  $('out').innerHTML = cardsHtml || '<div style="color:var(--mute);padding:20px;">No optimal criteria picks matched right now.</div>';
 }
 
 const activeCharts = {};
-function toggleChart(cId, symbol){
-  const el = document.getElementById(cId);
-  if(!el) return;
-  if(el.style.display === "block"){
+function toggleChart(cId, symbol) {
+  const el = $(cId);
+  if (!el) return;
+  if (el.style.display === "block") {
     el.style.display = "none";
     return;
   }
   el.style.display = "block";
-  if(!activeCharts[cId]){
+  if (!activeCharts[cId]) {
     let tvSym = "NSE:" + symbol;
-    if(symbol === "NIFTY") tvSym = "NSE:NIFTY50";
-    else if(symbol === "BANKNIFTY") tvSym = "NSE:BANKNIFTY";
+    if (symbol === "NIFTY") tvSym = "NSE:NIFTY50";
+    else if (symbol === "BANKNIFTY") tvSym = "NSE:BANKNIFTY";
 
-    const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
     new TradingView.widget({
       "autosize": true,
       "symbol": tvSym,
       "interval": "D",
       "timezone": "Asia/Kolkata",
-      "theme": isDark ? "dark" : "light",
+      "theme": "dark",
       "style": "1",
       "locale": "in",
       "enable_publishing": false,
       "hide_top_toolbar": false,
-      "hide_legend": true,
-      "save_image": false,
       "container_id": cId
     });
     activeCharts[cId] = true;
   }
 }
 
-// Bot Control JS
-async function saveBotSettings(){
+async function scan() {
+  $('go').disabled = true; $('go').textContent = "Scanning...";
+  try {
+    const r = await fetch("/api/scan?symbols=" + encodeURIComponent($("syms").value), { headers: { "x-key": key } });
+    if (r.status === 401) { key = prompt("App Password:") || ""; localStorage.setItem("key", key); return scan(); }
+    render(await r.json());
+  } catch (e) { $('out').innerHTML = '<div style="color:var(--danger)">Server connection failed.</div>'; }
+  $('go').disabled = false; $('go').textContent = "Scan Opportunities";
+}
+
+async function auto(refresh) {
+  try {
+    const r = await fetch("/api/auto" + (refresh ? "?refresh=true" : ""), { headers: { "x-key": key } });
+    if (r.status === 401) { key = prompt("App Password:") || ""; localStorage.setItem("key", key); return auto(refresh); }
+    const d = await r.json();
+    let cardsHtml = '';
+    for (const p of d.picks) cardsHtml += card(p, p.symbol);
+    $('out').innerHTML = cardsHtml || '<div style="color:var(--mute);padding:20px;">Auto-sweep complete. No strikes triggered.</div>';
+  } catch (e) { $('out').innerHTML = '<div style="color:var(--danger)">Auto scan failed.</div>'; }
+}
+
+async function saveBotSettings() {
   const payload = {
     enabled: $("bot_toggle").checked,
     paper_mode: $("bot_paper").checked,
-    target_profit: parseFloat($("bot_target").value) || 1500,
+    target_profit: parseFloat($("bot_target").value) || 1000,
+    max_loss_per_trade: parseFloat($("bot_tradesl").value) || 1200,
+    daily_loss_limit: parseFloat($("bot_kill").value) || 2000,
     trail_trigger: parseFloat($("bot_trail").value) || 1000,
     time_exit: $("bot_time").value.trim() || "15:20"
   };
   await fetch("/api/bot/settings", {
-    method: "POST",
-    headers: {"Content-Type": "application/json", "x-key": key},
+    method: "POST", headers: { "Content-Type": "application/json", "x-key": key },
     body: JSON.stringify(payload)
   });
-  alert("Bot settings successfully save ho gayi!");
+  alert("Settings updated successfully.");
 }
 
-async function botTradeNow(pick){
+async function botTradeNow(pick) {
   const r = await fetch("/api/bot/execute", {
-    method: "POST",
-    headers: {"Content-Type": "application/json", "x-key": key},
+    method: "POST", headers: { "Content-Type": "application/json", "x-key": key },
     body: JSON.stringify(pick)
   });
-  const data = await r.json();
-  if(data.status === "error") alert(data.message);
-  else alert("Trade successfully lag gaya! Live tracking shuru.");
+  const res = await r.json();
+  if (res.status === "error") alert(res.message);
+  else alert("Trade active & live tracking initiated!");
 }
 
-async function closeTradeNow(){
-  if(!confirm("Kya aap sach me position kaatna chahte hain?")) return;
-  await fetch("/api/bot/close", {method: "POST", headers: {"x-key": key}});
+async function closeTradeNow() {
+  if (!confirm("Square-off active position now?")) return;
+  await fetch("/api/bot/close", { method: "POST", headers: { "x-key": key } });
 }
 
-// Poll bot status every 2 seconds
-setInterval(async ()=>{
-  try{
-    const r = await fetch("/api/bot/status", {headers: {"x-key": key}});
+async function unlockKillSwitch() {
+  if (!confirm("Force reset Kill Switch?")) return;
+  await fetch("/api/bot/reset_kill_switch", { method: "POST", headers: { "x-key": key } });
+}
+
+setInterval(async () => {
+  try {
+    const r = await fetch("/api/bot/status", { headers: { "x-key": key } });
     const d = await r.json();
-    if(d.logs && d.logs.length) $("bot_log").textContent = d.logs[0];
-    
-    const tr = d.active_trade;
-    const box = $("live_trade_box");
-    if(tr){
-      box.style.display = "block";
-      $("live_contract").textContent = (tr.paper ? "[PAPER] " : "[REAL] ") + tr.contract;
-      const isProf = tr.current_pnl >= 0;
-      $("live_pnl_val").textContent = (isProf ? "+" : "") + "₹" + tr.current_pnl;
-      $("live_pnl_val").style.color = isProf ? "var(--ok)" : "#e63946";
-      $("live_details").innerHTML = `Entry: ₹${tr.entry_price} | LTP: ₹${tr.current_ltp} | SL: ₹${tr.sl_price} ${tr.trailed ? '(Trailed to Cost)' : ''}`;
+
+    const pnl = d.total_realized_pnl || 0;
+    $('kpi_pnl').textContent = (pnl >= 0 ? "+" : "") + "₹" + pnl.toFixed(2);
+    $('kpi_pnl').style.color = pnl >= 0 ? "var(--ok)" : "var(--danger)";
+    $('kpi_trades').textContent = (d.trade_count_today || 0) + " orders";
+    $('kpi_kill').textContent = "₹" + (d.daily_loss_limit || 2000);
+    $('kpi_mode').textContent = d.paper_mode ? "PAPER MODE" : "REAL ACCOUNT";
+    $('kpi_mode').style.color = d.paper_mode ? "var(--ok)" : "var(--warn)";
+
+    const kBanner = $('kill_banner');
+    if (d.kill_switch_triggered) {
+      kBanner.style.display = 'flex';
+      $('kill_msg').textContent = `🚨 KILL SWITCH ACTIVE: Loss ₹${Math.abs(pnl)} breached limit. Bot locked!`;
     } else {
-      box.style.display = "none";
+      kBanner.style.display = 'none';
     }
-  }catch(e){}
+
+    const tr = d.active_trade;
+    const box = $('live_trade_box');
+    if (tr) {
+      box.style.display = 'block';
+      $('live_tag').textContent = tr.paper ? "PAPER POSITION" : "REAL LIVE ORDER";
+      $('live_contract').textContent = tr.contract;
+      const isProf = tr.current_pnl >= 0;
+      $('live_pnl_val').textContent = (isProf ? "+" : "") + "₹" + tr.current_pnl.toFixed(2);
+      $('live_pnl_val').style.color = isProf ? "var(--ok)" : "var(--danger)";
+      $('live_details').textContent = `Entry: ₹${tr.entry_price} | LTP: ₹${tr.current_ltp} | SL: ₹${tr.sl_price} ${tr.trailed ? '(Trailed)' : ''}`;
+    } else {
+      box.style.display = 'none';
+    }
+  } catch(e) {}
 }, 2000);
 
-$("go").onclick=scan;
-
-let timer=null;
-async function auto(refresh){
-  clearTimeout(timer);
-  try{
-    const r=await fetch("/api/auto"+(refresh?"?refresh=true":""),{headers:{"x-key":key}});
-    if(r.status===401){key=prompt("App password daalo")||"";localStorage.setItem("key",key);return auto(refresh);}
-    const d=await r.json();renderAuto(d);
-    if(d.running)timer=setTimeout(()=>auto(false),4000);
-  }catch(e){$("out").innerHTML='<span class="err">Server se connect nahi hua. Check karo scanner chal raha hai.</span>';}
-}
-
-function renderAuto(d){
-  let h='<div class="mute">'+(d.running?'Scan chal raha hai: '+d.done+'/'+d.total+' symbol (zyada se zyada 3-4 minute)':'Poora hua: '+esc(d.updated||'-'))+'</div>';
-  if(d.errors.length)h+='<div class="warn">'+d.errors.length+' symbol skip hue: '+esc(d.errors.slice(0,2).join("; "))+'</div>';
-  if(!d.picks.length&&!d.running)h+='<div class="mute">Filter ke hisaab se koi achha mauka nahi mila.</div>';
-  for(const p of d.picks){
-    h+='<div class="sym"><b>'+esc(p.symbol)+' '+p.spot+'</b><span class="mute">Expiry '+esc(p.expiry)+' ('+p.days+' din)</span></div>';
-    for(const w of p.warnings)h+='<div class="warn">'+esc(w)+'</div>';
-    h+=card(p, p.symbol);
-  }
-  $("out").innerHTML=h;
-}
-
-$("auto").onclick=()=>auto(true);
-
-// Backtest Execution Logic
-async function runBacktest(){
+async function runBacktest() {
   const sym = $("bt_symbol").value.trim().toUpperCase();
   const strike = parseFloat($("bt_strike").value);
   const premium = parseFloat($("bt_premium").value);
   const expiryDate = $("bt_date").value;
-  const manualSpot = $("bt_expiry").value ? parseFloat($("bt_expiry").value) : null;
   const lot = parseInt($("bt_lot").value) || 1;
   const type = $("bt_type").value;
   const resDiv = $("bt_result");
 
-  if(!sym || isNaN(strike) || isNaN(premium) || (!expiryDate && manualSpot === null)){
-    resDiv.style.display = "block";
-    resDiv.style.background = "rgba(180, 95, 6, 0.15)";
-    resDiv.style.color = "var(--warn)";
-    resDiv.innerHTML = "Kripya Symbol, Strike, Premium aur Expiry Date bharein.";
-    return;
-  }
-
   resDiv.style.display = "block";
-  resDiv.style.background = "rgba(100, 100, 100, 0.15)";
+  resDiv.style.background = "var(--card)";
   resDiv.style.color = "var(--ink)";
-  resDiv.innerHTML = "Historical data fetch ho raha hai...";
+  resDiv.innerHTML = "Fetching historical candles...";
 
   try {
     const r = await fetch("/api/backtest", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-key": key
-      },
+      method: "POST", headers: { "Content-Type": "application/json", "x-key": key },
       body: JSON.stringify({
-        symbol: sym,
-        strike: strike,
-        entry_premium: premium,
-        expiry_date: expiryDate,
-        expiry_price: manualSpot,
-        option_type: type,
-        lot_size: lot
+        symbol: sym, strike: strike, entry_premium: premium,
+        expiry_date: expiryDate, option_type: type, lot_size: lot
       })
     });
-
-    if(r.status === 401){
-      key = prompt("App password daalo") || "";
-      localStorage.setItem("key", key);
-      return runBacktest();
-    }
-
-    const data = await r.json();
-
-    if(data.status === "success"){
-      const isProfit = data.total_pnl >= 0;
-      resDiv.style.background = isProfit ? "rgba(31, 122, 69, 0.15)" : "rgba(220, 53, 69, 0.15)";
-      resDiv.style.color = isProfit ? "var(--ok)" : "#e63946";
-      resDiv.innerHTML = `
-        <b>Nateeja: ${data.verdict === 'PROFIT' ? 'Munafa (PROFIT)' : 'Nuksaan (LOSS)'}</b><br>
-        Expiry Closing Spot: <b>₹${data.expiry_price}</b><br>
-        Total P&L: <b>₹${data.total_pnl}</b> (${data.roi_pct}% of premium)<br>
-        P&L Per Share: ₹${data.pnl_per_share} | Intrinsic Value: ₹${data.intrinsic_value}
-      `;
+    const d = await r.json();
+    if (d.status === "success") {
+      const isProf = d.total_pnl >= 0;
+      resDiv.style.background = isProf ? "var(--ok-bg)" : "var(--danger-bg)";
+      resDiv.style.color = isProf ? "var(--ok)" : "var(--danger)";
+      resDiv.innerHTML = `<b>Verdict: ${d.verdict}</b><br>Expiry Close Spot: ₹${d.expiry_price}<br>Total P&L: ₹${d.total_pnl} (${d.roi_pct}% ROI)`;
     } else {
-      resDiv.style.background = "rgba(220, 53, 69, 0.15)";
-      resDiv.style.color = "#e63946";
-      resDiv.innerHTML = data.message || "Calculation fail ho gayi. Dobara koshish karein.";
+      resDiv.style.background = "var(--danger-bg)";
+      resDiv.style.color = "var(--danger)";
+      resDiv.innerHTML = d.message || "Backtest calculation failed.";
     }
   } catch(e) {
-    resDiv.style.background = "rgba(220, 53, 69, 0.15)";
-    resDiv.style.color = "#e63946";
-    resDiv.innerHTML = "Server se connect nahi hua. Check karein backend chal raha hai.";
+    resDiv.innerHTML = "Server connection error.";
   }
 }
 </script>
