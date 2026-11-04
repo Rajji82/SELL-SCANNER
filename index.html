@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#14181f">
-<title>Option Sell Scanner & Backtest</title>
+<title>Pro Option Sell Scanner</title>
 <style>
 :root{--bg:#eef1f5;--card:#fff;--ink:#1b2330;--mute:#667085;--line:#dde2ea;--ok:#1f7a45;--warn:#b45f06;--accent:#2f4bb8;color-scheme:light}
 @media (prefers-color-scheme:dark){:root{--bg:#14181f;--card:#1d232d;--ink:#e8ecf3;--mute:#98a2b3;--line:#2c3441;--ok:#4cc38a;--warn:#f0a53c;--accent:#8aa4ff;color-scheme:dark}}
@@ -20,16 +20,33 @@ button:disabled{opacity:.6}
 .sym{margin:18px 0 8px;display:flex;justify-content:space-between;align-items:baseline}
 .sym b{font-size:17px}.mute{color:var(--mute);font-size:13px}
 .warn{color:var(--warn);font-size:13px;margin:4px 0}
-.opt{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:8px}
+.opt{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px}
 .top{display:flex;justify-content:space-between;gap:8px;font-weight:600}
 .pop{height:8px;border-radius:4px;background:var(--line);margin:8px 0;overflow:hidden}
 .pop i{display:block;height:100%;background:var(--ok)}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;font-size:13px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:3px 12px;font-size:13px}
 .grid span{color:var(--mute)}
 .err{color:var(--warn)}
 button#auto{background:var(--ok);color:#fff}
 @media (prefers-color-scheme:dark){button#auto{color:#0b1b12}}
 .note{margin-top:20px;font-size:12px;color:var(--mute)}
+
+/* Badges for 5 Features */
+.badge-group{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}
+.badge{padding:2px 6px;border-radius:4px;font-size:11px;font-weight:bold}
+.badge-hot{background:#ffebee;color:#c62828}
+.badge-cold{background:#fff3e0;color:#ef6c00}
+.badge-sd{background:#e8f5e9;color:#2e7d32}
+.badge-tech{background:#e3f2fd;color:#1565c0}
+.badge-pot{background:#f3e5f5;color:#7b1fa2}
+
+@media (prefers-color-scheme:dark){
+  .badge-hot{background:#441a1d;color:#ff8a80}
+  .badge-cold{background:#3e2723;color:#ffb74d}
+  .badge-sd{background:#1b3824;color:#81c784}
+  .badge-tech{background:#182b49;color:#90caf9}
+  .badge-pot{background:#381c3d;color:#ce93d8}
+}
 
 .bt-box{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:14px;margin-top:24px}
 .bt-grid{display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:10px}
@@ -39,7 +56,7 @@ button#auto{background:var(--ok);color:#fff}
 </style>
 </head>
 <body>
-<h1>Option Sell Scanner</h1>
+<h1>Option Sell Scanner (Pro)</h1>
 <div class="bar">
   <input id="syms" value="NIFTY,BANKNIFTY,RELIANCE,HDFCBANK" aria-label="Symbols, comma se alag">
   <button id="go">Scan karo</button>
@@ -87,7 +104,7 @@ button#auto{background:var(--ok);color:#fff}
   <div id="bt_result"></div>
 </div>
 
-<p class="note">POP delta se nikala gaya andaaza hai, guarantee nahi. Option selling mein nuksaan asaleel roop se bahut bada ho sakta hai. Stop-loss sirf suggestion hai, ye app order nahi daalta.</p>
+<p class="note">POP delta se nikala gaya andaaza hai. 1-SD aur POT market volatility par aadharit hain. Stop-loss sirf suggestion hai, ye app order nahi daalta.</p>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -105,20 +122,31 @@ async function scan(){
 }
 
 function card(p){
+  let badges = [];
+  if(p.ivr >= 50) badges.push('<span class="badge badge-hot">🔥 High IVR '+p.ivr+'%</span>');
+  else if(p.ivr < 25) badges.push('<span class="badge badge-cold">⚠️ Low IVR '+p.ivr+'%</span>');
+  
+  if(p.is_outside_sd) badges.push('<span class="badge badge-sd">🛡️ Outside 1-SD Safe</span>');
+  if(p.tech_note) badges.push('<span class="badge badge-tech">📈 '+esc(p.tech_note)+'</span>');
+  badges.push('<span class="badge badge-pot">⚡ POT: '+p.pot+'%</span>');
+
   return '<div class="opt"><div class="top"><span>SELL '+esc(p.contract)+' @ '+p.ltp+'</span><span>POP '+p.pop+'%</span></div>'
+  +'<div class="badge-group">' + badges.join("") + '</div>'
   +'<div class="pop"><i style="width:'+p.pop+'%"></i></div><div class="grid">'
   +'<div><span>Premium/lot </span>₹'+p.premium_lot+'</div><div><span>Lot </span>'+p.lot+'</div>'
   +'<div><span>Stop-loss </span>'+p.sl_price+'</div><div><span>SL par nuksaan </span>₹'+p.loss_at_sl+'</div>'
   +'<div><span>Breakeven </span>'+p.breakeven+'</div><div><span>Spot se door </span>'+p.dist_pct+'%</div>'
-  +'<div><span>Delta </span>'+p.delta+'</div><div><span>IV </span>'+esc(p.iv)+'</div>'
-  +'<div><span>OI </span>'+p.oi+'</div><div><span>Spread </span>'+p.spread_pct+'%</div></div></div>';
+  +'<div><span>Expected Move </span>±₹'+p.exp_move+'</div><div><span>Touch Risk (POT) </span>'+p.pot+'%</div>'
+  +'<div><span>IV / IVP </span>'+esc(p.iv)+' / '+p.ivp+'%</div><div><span>OI / Vol </span>'+p.oi+' / '+p.vol+'</div>'
+  +'<div><span>Spread </span>'+p.spread_pct+'%</div></div></div>';
 }
 
 function render(d){
   let h='<div class="mute">Update: '+esc(d.time)+'</div>';
   for(const s of d.results){
     if(s.error){h+='<div class="sym"><b>'+esc(s.symbol)+'</b></div><div class="err">'+esc(s.error)+'</div>';continue;}
-    h+='<div class="sym"><b>'+esc(s.symbol)+' '+s.spot+'</b><span class="mute">Expiry '+esc(s.expiry)+' ('+s.days+' din)</span></div>';
+    let emaInfo = s.ema20 ? ' | 20 EMA: ₹'+s.ema20 : '';
+    h+='<div class="sym"><b>'+esc(s.symbol)+' '+s.spot+'</b><span class="mute">Expiry '+esc(s.expiry)+' ('+s.days+' din)'+emaInfo+'</span></div>';
     for(const w of s.warnings)h+='<div class="warn">'+esc(w)+'</div>';
     if(!s.picks.length)h+='<div class="mute">Filter ke hisaab se koi achha strike nahi mila.</div>';
     for(const p of s.picks)h+=card(p);
@@ -153,7 +181,7 @@ function renderAuto(d){
 
 $("auto").onclick=()=>auto(true);
 
-// Backtest & P&L Execution Logic
+// Backtest Execution Logic
 async function runBacktest(){
   const sym = $("bt_symbol").value.trim().toUpperCase();
   const strike = parseFloat($("bt_strike").value);
