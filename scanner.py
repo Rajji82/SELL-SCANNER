@@ -1,5 +1,6 @@
-"""Option-selling scanner (Angel One SmartAPI) with Advanced POP, IVR, 1-SD & Technical Filters."""
-import os, time, threading, math, datetime as dt
+"""Option-selling scanner (Angel One SmartAPI) with News Sentiment, Spreads, PCR & Max Pain."""
+import os, time, threading, math, datetime as dt, urllib.parse
+import xml.etree.ElementTree as ET
 import requests, pyotp
 from SmartApi import SmartConnect
 from dotenv import load_dotenv
@@ -17,7 +18,7 @@ DELTA_MIN, DELTA_MAX = 0.10, 0.25
 MAX_SPREAD_PCT = 5.0
 MIN_OI, MIN_VOL = 1000, 100
 SL_MULTIPLE = 2.0
-EVENTS = {}  # Jaise: {"TCS": "2026-11-15"}
+EVENTS = {}
 
 MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
 INDEX_TOKENS = {"NIFTY": "99926000", "BANKNIFTY": "99926009"}
@@ -26,6 +27,7 @@ _lock = threading.Lock()
 _api = None
 _master = {"day": None, "rows": []}
 _historical_cache = {}
+_news_cache = {}
 
 
 def api():
@@ -84,8 +86,40 @@ def get_spot(a, rows, sym):
     return float(d["data"]["fetched"][0]["ltp"])
 
 
+def get_news_sentiment(symbol):
+    """Google News RSS se taaza news headlines aur negative risk keywords analyze karna"""
+    now = time.time()
+    if symbol in _news_cache and now - _news_cache[symbol]["ts"] < 3600:
+        return _news_cache[symbol]
+
+    query = f"{symbol} share news stock"
+    url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=en-IN&gl=IN&ceid=IN:en"
+    headlines = []
+    has_negative_news = False
+    neg_keywords = ["fraud", "sebi", "raid", "investigation", "penalty", "loss", "crash", "fda", "warning", "probe", "downgrade"]
+
+    try:
+        resp = requests.get(url, timeout=5)
+        root = ET.fromstring(resp.content)
+        for item in root.findall(".//item")[:3]:
+            title = item.find("title").text or ""
+            headlines.append(title)
+            title_lower = title.lower()
+            if any(k in title_lower for k in neg_keywords):
+                has_negative_news = True
+    except Exception:
+        pass
+
+    res = {
+        "ts": now,
+        "headlines": headlines,
+        "risk_flag": has_negative_news
+    }
+    _news_cache[symbol] = res
+    return res
+
+
 def get_technical_and_vol_stats(a, rows, sym):
-    """Calculates 20 EMA, IV Rank & IV Percentile baseline using 1-year candles"""
     today = dt.date.today()
     if sym in _historical_cache and _historical_cache[sym]["date"] == today:
         return _historical_cache[sym]
@@ -104,13 +138,11 @@ def get_technical_and_vol_stats(a, rows, sym):
         candles = res.get("data") or []
         if len(candles) >= 30:
             closes = [float(c[4]) for c in candles]
-            # Calculate 20 EMA
             k = 2 / (20 + 1)
             ema = closes[0]
             for c in closes[1:]:
                 ema = (c * k) + (ema * (1 - k))
             
-            # Calculate Historical Volatility for IVR/IVP
             returns = []
             for i in range(1, len(closes)):
                 if closes[i-1] > 0 and closes[i] > 0:
@@ -176,6 +208,7 @@ def scan_symbol(sym, min_days=3):
 
     tech_stats = get_technical_and_vol_stats(a, rows, sym)
     ema20 = tech_stats.get("ema20", 0.0)
+    news_info = get_news_sentiment(sym)
 
     greeks = a.optionGreek({"name": sym, "expirydate": es}).get("data") or []
     tokens = {}
@@ -200,9 +233,50 @@ def scan_symbol(sym, min_days=3):
         time.sleep(1.1)
 
     warn = []
+    if news_info.get("risk_flag"):
+        warn.append("🚨 News Alert: Taaza news mein negative sentiment/investigation keywords mile hain!")
+
     ev = EVENTS.get(sym)
     if ev and dt.date.fromisoformat(ev) <= exp:
         warn.append(f"⚠️ Event Alert: {ev} par corporate event/result hai! Gap risk high hai.")
+
+    # Calculate PCR & Max Pain
+    total_ce_oi = 0
+    total_pe_oi = 0
+    oi_by_strike = {}
+
+    for g in greeks:
+        k = round(float(g["strikePrice"]), 2)
+        typ = g["optionType"]
+        # Approximate OI from greek data or token
+        m = tokens.get((k, typ))
+        if m and m["token"] in quotes:
+            oi_val = int(quotes[m["token"]].get("opnInterest") or 0)
+            if typ == "CE":
+                total_ce_oi += oi_val
+            else:
+                total_pe_oi += oi_val
+            if k not in oi_by_strike:
+                oi_by_strike[k] = {"CE": 0, "PE": 0}
+            oi_by_strike[k][typ] += oi_val
+
+    pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 1.0
+
+    # Max Pain calculation
+    max_pain = spot
+    if oi_by_strike:
+        strikes = sorted(oi_by_strike.keys())
+        min_loss = float("inf")
+        for s in strikes:
+            total_loss = 0
+            for k, ois in oi_by_strike.items():
+                if s > k:
+                    total_loss += (s - k) * ois["CE"]
+                elif s < k:
+                    total_loss += (k - s) * ois["PE"]
+            if total_loss < min_loss:
+                min_loss = total_loss
+                max_pain = s
 
     picks = []
     for g, d, m in cand:
@@ -222,22 +296,16 @@ def scan_symbol(sym, min_days=3):
             continue
         k, typ, lot = float(g["strikePrice"]), g["optionType"], int(m["lotsize"])
         
-        # 1. POP & POT Calculation
         pop = round((1 - d) * 100, 1)
-        pot = round(min(100.0, 2 * d * 100), 1)  # Probability of touching strike before expiry
-        
-        # 2. IV Rank & IV Percentile
+        pot = round(min(100.0, 2 * d * 100), 1)
         iv = round(float(g.get("impliedVolatility") or 0), 1)
         ivr, ivp = calculate_ivr_ivp(iv, tech_stats)
 
-        # 3. 1-Standard Deviation & Expected Move
         exp_move = round(spot * (iv / 100) * math.sqrt(days_to_exp / 365), 2)
         upper_sd = round(spot + exp_move, 2)
         lower_sd = round(spot - exp_move, 2)
-        
         is_outside_sd = (typ == "CE" and k > upper_sd) or (typ == "PE" and k < lower_sd)
 
-        # 4. Technical / Trend Confirmation with 20 EMA
         tech_note = ""
         if ema20 > 0:
             if typ == "CE" and spot < ema20:
@@ -248,6 +316,14 @@ def scan_symbol(sym, min_days=3):
                 tech_note = "Bullish momentum: Watch CE"
             elif typ == "PE" and spot < ema20:
                 tech_note = "Bearish momentum: Watch PE"
+
+        # Credit Spread Hedge (Buy Strike further OTM)
+        step = round(spot * 0.02, -1) or 50.0  # ~2% further OTM
+        hedge_k = round(k + step, 2) if typ == "CE" else round(k - step, 2)
+        hedge_est_prem = round(ltp * 0.35, 2)  # approximate hedge buy premium
+        net_credit = round(ltp - hedge_est_prem, 2)
+        spread_max_profit = round(net_credit * lot, 2)
+        spread_max_loss = round((abs(k - hedge_k) - net_credit) * lot, 2)
 
         prem_pct = ltp / spot * 100
         picks.append({
@@ -263,11 +339,17 @@ def scan_symbol(sym, min_days=3):
             "loss_at_sl": round(ltp * (SL_MULTIPLE - 1) * lot, 2),
             "breakeven": round(k - ltp if typ == "PE" else k + ltp, 2),
             "oi": oi, "vol": vol, "spread_pct": round(spread, 2),
+            "hedge_strike": hedge_k, "net_credit": net_credit,
+            "spread_profit": spread_max_profit, "spread_loss": spread_max_loss,
             "score": round((pop / 100 * prem_pct) * (1 + (ivr / 100)), 3),
         })
     picks.sort(key=lambda p: p["score"], reverse=True)
-    return {"symbol": sym, "spot": spot, "expiry": exp.isoformat(), "days": days_to_exp,
-            "ema20": ema20, "warnings": warn, "picks": picks[:8]}
+    return {
+        "symbol": sym, "spot": spot, "expiry": exp.isoformat(), "days": days_to_exp,
+        "ema20": ema20, "pcr": pcr, "max_pain": max_pain,
+        "headlines": news_info.get("headlines", []),
+        "warnings": warn, "picks": picks[:8]
+    }
 
 
 app = FastAPI()
