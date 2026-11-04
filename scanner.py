@@ -1,4 +1,4 @@
-"""Option-selling scanner (Angel One SmartAPI) with News Sentiment, Spreads, PCR & Max Pain."""
+"""Option-selling scanner (Angel One SmartAPI) with Paper Trading, Time Exit, Trailing SL, Spreads & News."""
 import os, time, threading, math, datetime as dt, urllib.parse
 import xml.etree.ElementTree as ET
 import requests, pyotp
@@ -6,12 +6,13 @@ from SmartApi import SmartConnect
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 load_dotenv()
-API_KEY = os.environ["ANGEL_API_KEY"]
-CLIENT = os.environ["ANGEL_CLIENT_ID"]
-PIN = os.environ["ANGEL_PIN"]
-TOTP_SECRET = os.environ["ANGEL_TOTP_SECRET"]
+API_KEY = os.environ.get("ANGEL_API_KEY", "")
+CLIENT = os.environ.get("ANGEL_CLIENT_ID", "")
+PIN = os.environ.get("ANGEL_PIN", "")
+TOTP_SECRET = os.environ.get("ANGEL_TOTP_SECRET", "")
 APP_TOKEN = os.getenv("APP_TOKEN", "")
 
 DELTA_MIN, DELTA_MAX = 0.10, 0.25
@@ -28,6 +29,27 @@ _api = None
 _master = {"day": None, "rows": []}
 _historical_cache = {}
 _news_cache = {}
+
+# Bot State with Paper Trading, Trailing SL & Time Exit
+_bot_lock = threading.Lock()
+_bot_state = {
+    "enabled": False,
+    "paper_mode": True,
+    "target_profit": 1500.0,
+    "max_loss": 3000.0,
+    "trail_trigger": 1000.0,
+    "time_exit": "15:20",
+    "active_trade": None,
+    "history": [],
+    "logs": []
+}
+
+
+def log_bot(msg):
+    ts = dt.datetime.now().strftime("%H:%M:%S")
+    with _bot_lock:
+        _bot_state["logs"].insert(0, f"[{ts}] {msg}")
+        _bot_state["logs"] = _bot_state["logs"][:25]
 
 
 def api():
@@ -87,7 +109,6 @@ def get_spot(a, rows, sym):
 
 
 def get_news_sentiment(symbol):
-    """Google News RSS se taaza news headlines aur negative risk keywords analyze karna"""
     now = time.time()
     if symbol in _news_cache and now - _news_cache[symbol]["ts"] < 3600:
         return _news_cache[symbol]
@@ -110,11 +131,7 @@ def get_news_sentiment(symbol):
     except Exception:
         pass
 
-    res = {
-        "ts": now,
-        "headlines": headlines,
-        "risk_flag": has_negative_news
-    }
+    res = {"ts": now, "headlines": headlines, "risk_flag": has_negative_news}
     _news_cache[symbol] = res
     return res
 
@@ -129,11 +146,8 @@ def get_technical_and_vol_stats(a, rows, sym):
         from_d = (today - dt.timedelta(days=365)).strftime("%Y-%m-%d 09:15")
         to_d = today.strftime("%Y-%m-%d 15:30")
         res = a.getCandleData({
-            "exchange": seg,
-            "symboltoken": tok,
-            "interval": "ONE_DAY",
-            "fromdate": from_d,
-            "todate": to_d
+            "exchange": seg, "symboltoken": tok, "interval": "ONE_DAY",
+            "fromdate": from_d, "todate": to_d
         })
         candles = res.get("data") or []
         if len(candles) >= 30:
@@ -161,11 +175,8 @@ def get_technical_and_vol_stats(a, rows, sym):
             max_v = max(hv_series) if hv_series else 45.0
             
             _historical_cache[sym] = {
-                "date": today,
-                "ema20": round(ema, 2),
-                "min_iv": min_v,
-                "max_iv": max_v,
-                "series": sorted(hv_series)
+                "date": today, "ema20": round(ema, 2),
+                "min_iv": min_v, "max_iv": max_v, "series": sorted(hv_series)
             }
             return _historical_cache[sym]
     except Exception:
@@ -240,15 +251,12 @@ def scan_symbol(sym, min_days=3):
     if ev and dt.date.fromisoformat(ev) <= exp:
         warn.append(f"⚠️ Event Alert: {ev} par corporate event/result hai! Gap risk high hai.")
 
-    # Calculate PCR & Max Pain
-    total_ce_oi = 0
-    total_pe_oi = 0
+    total_ce_oi, total_pe_oi = 0, 0
     oi_by_strike = {}
 
     for g in greeks:
         k = round(float(g["strikePrice"]), 2)
         typ = g["optionType"]
-        # Approximate OI from greek data or token
         m = tokens.get((k, typ))
         if m and m["token"] in quotes:
             oi_val = int(quotes[m["token"]].get("opnInterest") or 0)
@@ -262,7 +270,6 @@ def scan_symbol(sym, min_days=3):
 
     pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 1.0
 
-    # Max Pain calculation
     max_pain = spot
     if oi_by_strike:
         strikes = sorted(oi_by_strike.keys())
@@ -317,17 +324,17 @@ def scan_symbol(sym, min_days=3):
             elif typ == "PE" and spot < ema20:
                 tech_note = "Bearish momentum: Watch PE"
 
-        # Credit Spread Hedge (Buy Strike further OTM)
-        step = round(spot * 0.02, -1) or 50.0  # ~2% further OTM
+        step = round(spot * 0.02, -1) or 50.0
         hedge_k = round(k + step, 2) if typ == "CE" else round(k - step, 2)
-        hedge_est_prem = round(ltp * 0.35, 2)  # approximate hedge buy premium
+        hedge_est_prem = round(ltp * 0.35, 2)
         net_credit = round(ltp - hedge_est_prem, 2)
         spread_max_profit = round(net_credit * lot, 2)
         spread_max_loss = round((abs(k - hedge_k) - net_credit) * lot, 2)
 
         prem_pct = ltp / spot * 100
         picks.append({
-            "contract": f"{sym} {k:g} {typ}", "type": typ, "strike": k, "ltp": round(ltp, 2),
+            "contract": f"{sym} {k:g} {typ}", "symbol": sym, "token": m["token"],
+            "type": typ, "strike": k, "ltp": round(ltp, 2),
             "pop": pop, "pot": pot, "delta": round(d, 2), "iv": iv,
             "ivr": ivr, "ivp": ivp,
             "exp_move": exp_move, "is_outside_sd": is_outside_sd,
@@ -350,6 +357,69 @@ def scan_symbol(sym, min_days=3):
         "headlines": news_info.get("headlines", []),
         "warnings": warn, "picks": picks[:8]
     }
+
+
+# ---- Background Auto Bot Loop (Paper Trade, Trailing SL & Time Exit) ----
+def _bot_monitor_loop():
+    while True:
+        time.sleep(3)
+        with _bot_lock:
+            if not _bot_state["enabled"] or not _bot_state["active_trade"]:
+                continue
+            tr = _bot_state["active_trade"]
+
+        try:
+            # 1. Fetch current price
+            a = api()
+            res = a.getMarketData("LTP", {"NFO": [tr["token"]]})
+            curr_ltp = float(res["data"]["fetched"][0]["ltp"])
+            
+            entry = tr["entry_price"]
+            lot = tr["lot_size"]
+            current_pnl = round((entry - curr_ltp) * lot, 2)
+            tr["current_ltp"] = curr_ltp
+            tr["current_pnl"] = current_pnl
+
+            # 2. Trailing Stop-Loss Rule
+            # Jab munafa >= trigger (₹1000) ho, SL ko Cost (Entry Price) par lock karo
+            if current_pnl >= _bot_state["trail_trigger"] and not tr["trailed"]:
+                tr["sl_price"] = entry
+                tr["trailed"] = True
+                log_bot(f"🎯 Profit ₹{current_pnl} cross hua! Trailing SL Entry ₹{entry} par Lock kar diya (Risk-Free).")
+
+            # 3. Check Target Hit
+            if current_pnl >= _bot_state["target_profit"]:
+                _close_active_trade(reason=f"TARGET_HIT (+₹{current_pnl})")
+                continue
+
+            # 4. Check Stop-Loss Hit
+            if curr_ltp >= tr["sl_price"]:
+                _close_active_trade(reason=f"SL_HIT (₹{curr_ltp} >= ₹{tr['sl_price']}, Loss: ₹{current_pnl})")
+                continue
+
+            # 5. Check Time-based Auto Exit (3:20 PM)
+            now_time = dt.datetime.now().strftime("%H:%M")
+            if now_time >= _bot_state["time_exit"]:
+                _close_active_trade(reason=f"TIME_EXIT ({_bot_state['time_exit']} PM auto square-off, PnL: ₹{current_pnl})")
+                continue
+
+        except Exception as e:
+            time.sleep(2)
+
+
+def _close_active_trade(reason="MANUAL"):
+    with _bot_lock:
+        tr = _bot_state["active_trade"]
+        if not tr:
+            return
+        tr["exit_time"] = dt.datetime.now().strftime("%H:%M:%S")
+        tr["reason"] = reason
+        _bot_state["history"].insert(0, tr)
+        _bot_state["active_trade"] = None
+        log_bot(f"🚪 Trade Closed: {tr['contract']} | Reason: {reason}")
+
+
+threading.Thread(target=_bot_monitor_loop, daemon=True).start()
 
 
 app = FastAPI()
@@ -436,6 +506,72 @@ def auto(refresh: bool = False, x_key: str = Header(default="")):
             _auto.update(running=True, ts=time.time())
             threading.Thread(target=_auto_run, daemon=True).start()
     return {k: _auto[k] for k in ("running", "done", "total", "updated", "picks", "errors")}
+
+
+# ---- Bot API Endpoints ----
+@app.get("/api/bot/status")
+def bot_status(x_key: str = Header(default="")):
+    if APP_TOKEN and x_key != APP_TOKEN:
+        raise HTTPException(401, "galat password")
+    with _bot_lock:
+        return _bot_state
+
+
+class BotSettings(BaseModel):
+    enabled: bool
+    paper_mode: bool
+    target_profit: float
+    trail_trigger: float
+    time_exit: str
+
+
+@app.post("/api/bot/settings")
+def update_bot_settings(s: BotSettings, x_key: str = Header(default="")):
+    if APP_TOKEN and x_key != APP_TOKEN:
+        raise HTTPException(401, "galat password")
+    with _bot_lock:
+        _bot_state["enabled"] = s.enabled
+        _bot_state["paper_mode"] = s.paper_mode
+        _bot_state["target_profit"] = s.target_profit
+        _bot_state["trail_trigger"] = s.trail_trigger
+        _bot_state["time_exit"] = s.time_exit
+        log_bot(f"⚙️ Settings updated: PaperMode={s.paper_mode}, Target=₹{s.target_profit}, Trail=₹{s.trail_trigger}, Exit={s.time_exit}")
+    return {"status": "success", "settings": _bot_state}
+
+
+@app.post("/api/bot/execute")
+def execute_trade_pick(pick: dict, x_key: str = Header(default="")):
+    if APP_TOKEN and x_key != APP_TOKEN:
+        raise HTTPException(401, "galat password")
+    with _bot_lock:
+        if _bot_state["active_trade"]:
+            return {"status": "error", "message": "Pehle se 1 active trade chal raha hai!"}
+        
+        trade = {
+            "contract": pick["contract"],
+            "token": pick["token"],
+            "symbol": pick["symbol"],
+            "entry_price": float(pick["ltp"]),
+            "current_ltp": float(pick["ltp"]),
+            "lot_size": int(pick["lot"]),
+            "sl_price": float(pick["sl_price"]),
+            "trailed": False,
+            "entry_time": dt.datetime.now().strftime("%H:%M:%S"),
+            "paper": _bot_state["paper_mode"],
+            "current_pnl": 0.0
+        }
+        _bot_state["active_trade"] = trade
+        mode_str = "📄 [PAPER TRADE]" if _bot_state["paper_mode"] else "⚡ [REAL ORDER]"
+        log_bot(f"{mode_str} Entered {trade['contract']} @ ₹{trade['entry_price']} | SL: ₹{trade['sl_price']}")
+    return {"status": "success", "trade": trade}
+
+
+@app.post("/api/bot/close")
+def close_trade_manual(x_key: str = Header(default="")):
+    if APP_TOKEN and x_key != APP_TOKEN:
+        raise HTTPException(401, "galat password")
+    _close_active_trade(reason="MANUAL_SQUARE_OFF")
+    return {"status": "success"}
 
 
 # ---- Automated Historical Backtest Endpoint ----
