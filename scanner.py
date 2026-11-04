@@ -1,5 +1,5 @@
-"""Option-selling scanner (Angel One SmartAPI). Sirf suggestion deta hai, order NAHI daalta."""
-import os, time, threading, datetime as dt
+"""Option-selling scanner (Angel One SmartAPI) with Advanced POP, IVR, 1-SD & Technical Filters."""
+import os, time, threading, math, datetime as dt
 import requests, pyotp
 from SmartApi import SmartConnect
 from dotenv import load_dotenv
@@ -11,13 +11,13 @@ API_KEY = os.environ["ANGEL_API_KEY"]
 CLIENT = os.environ["ANGEL_CLIENT_ID"]
 PIN = os.environ["ANGEL_PIN"]
 TOTP_SECRET = os.environ["ANGEL_TOTP_SECRET"]
-APP_TOKEN = os.getenv("APP_TOKEN", "")  # app kholte waqt ye password maangega
+APP_TOKEN = os.getenv("APP_TOKEN", "")
 
 DELTA_MIN, DELTA_MAX = 0.10, 0.25
 MAX_SPREAD_PCT = 5.0
 MIN_OI, MIN_VOL = 1000, 100
 SL_MULTIPLE = 2.0
-EVENTS = {}
+EVENTS = {}  # Jaise: {"TCS": "2026-11-15"}
 
 MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
 INDEX_TOKENS = {"NIFTY": "99926000", "BANKNIFTY": "99926009"}
@@ -25,6 +25,7 @@ INDEX_TOKENS = {"NIFTY": "99926000", "BANKNIFTY": "99926009"}
 _lock = threading.Lock()
 _api = None
 _master = {"day": None, "rows": []}
+_historical_cache = {}
 
 
 def api():
@@ -83,6 +84,86 @@ def get_spot(a, rows, sym):
     return float(d["data"]["fetched"][0]["ltp"])
 
 
+def get_technical_and_vol_stats(a, rows, sym):
+    """Calculates 20 EMA, IV Rank & IV Percentile baseline using 1-year candles"""
+    today = dt.date.today()
+    if sym in _historical_cache and _historical_cache[sym]["date"] == today:
+        return _historical_cache[sym]
+
+    try:
+        tok, seg = get_token_for_symbol(rows, sym)
+        from_d = (today - dt.timedelta(days=365)).strftime("%Y-%m-%d 09:15")
+        to_d = today.strftime("%Y-%m-%d 15:30")
+        res = a.getCandleData({
+            "exchange": seg,
+            "symboltoken": tok,
+            "interval": "ONE_DAY",
+            "fromdate": from_d,
+            "todate": to_d
+        })
+        candles = res.get("data") or []
+        if len(candles) >= 30:
+            closes = [float(c[4]) for c in candles]
+            # Calculate 20 EMA
+            k = 2 / (20 + 1)
+            ema = closes[0]
+            for c in closes[1:]:
+                ema = (c * k) + (ema * (1 - k))
+            
+            # Calculate Historical Volatility for IVR/IVP
+            returns = []
+            for i in range(1, len(closes)):
+                if closes[i-1] > 0 and closes[i] > 0:
+                    returns.append(math.log(closes[i] / closes[i-1]))
+            
+            hv_series = []
+            window = 20
+            for i in range(window, len(returns)):
+                sub = returns[i - window:i]
+                mean = sum(sub) / window
+                variance = sum((x - mean) ** 2 for x in sub) / (window - 1)
+                daily_std = math.sqrt(variance)
+                hv_series.append(daily_std * math.sqrt(252) * 100)
+
+            min_v = min(hv_series) if hv_series else 15.0
+            max_v = max(hv_series) if hv_series else 45.0
+            
+            _historical_cache[sym] = {
+                "date": today,
+                "ema20": round(ema, 2),
+                "min_iv": min_v,
+                "max_iv": max_v,
+                "series": sorted(hv_series)
+            }
+            return _historical_cache[sym]
+    except Exception:
+        pass
+
+    fallback = {"date": today, "ema20": 0.0, "min_iv": 15.0, "max_iv": 45.0, "series": []}
+    _historical_cache[sym] = fallback
+    return fallback
+
+
+def calculate_ivr_ivp(current_iv, stats):
+    if not stats or current_iv <= 0:
+        return 50.0, 50.0
+    min_iv = stats.get("min_iv", 15.0)
+    max_iv = stats.get("max_iv", 45.0)
+    series = stats.get("series", [])
+
+    if max_iv <= min_iv:
+        ivr = 50.0
+    else:
+        ivr = max(0.0, min(100.0, ((current_iv - min_iv) / (max_iv - min_iv)) * 100))
+
+    if series:
+        count_less = sum(1 for v in series if v < current_iv)
+        ivp = (count_less / len(series)) * 100
+    else:
+        ivp = ivr
+    return round(ivr, 1), round(ivp, 1)
+
+
 def scan_symbol(sym, min_days=3):
     a, rows = api(), master()
     exp = pick_expiry(rows, sym, min_days)
@@ -90,7 +171,11 @@ def scan_symbol(sym, min_days=3):
         return {"symbol": sym, "error": "expiry nahi mili (symbol sahi hai?)"}
     es = exp.strftime("%d%b%Y").upper()
     spot = get_spot(a, rows, sym)
+    days_to_exp = max(1, (exp - dt.date.today()).days)
     time.sleep(1.1)
+
+    tech_stats = get_technical_and_vol_stats(a, rows, sym)
+    ema20 = tech_stats.get("ema20", 0.0)
 
     greeks = a.optionGreek({"name": sym, "expirydate": es}).get("data") or []
     tokens = {}
@@ -117,7 +202,7 @@ def scan_symbol(sym, min_days=3):
     warn = []
     ev = EVENTS.get(sym)
     if ev and dt.date.fromisoformat(ev) <= exp:
-        warn.append(f"Event {ev} expiry se pehle hai: gap-risk zyada")
+        warn.append(f"⚠️ Event Alert: {ev} par corporate event/result hai! Gap risk high hai.")
 
     picks = []
     for g, d, m in cand:
@@ -136,22 +221,53 @@ def scan_symbol(sym, min_days=3):
         if spread > MAX_SPREAD_PCT or oi < MIN_OI or vol < MIN_VOL:
             continue
         k, typ, lot = float(g["strikePrice"]), g["optionType"], int(m["lotsize"])
-        pop = (1 - d) * 100
+        
+        # 1. POP & POT Calculation
+        pop = round((1 - d) * 100, 1)
+        pot = round(min(100.0, 2 * d * 100), 1)  # Probability of touching strike before expiry
+        
+        # 2. IV Rank & IV Percentile
+        iv = round(float(g.get("impliedVolatility") or 0), 1)
+        ivr, ivp = calculate_ivr_ivp(iv, tech_stats)
+
+        # 3. 1-Standard Deviation & Expected Move
+        exp_move = round(spot * (iv / 100) * math.sqrt(days_to_exp / 365), 2)
+        upper_sd = round(spot + exp_move, 2)
+        lower_sd = round(spot - exp_move, 2)
+        
+        is_outside_sd = (typ == "CE" and k > upper_sd) or (typ == "PE" and k < lower_sd)
+
+        # 4. Technical / Trend Confirmation with 20 EMA
+        tech_note = ""
+        if ema20 > 0:
+            if typ == "CE" and spot < ema20:
+                tech_note = "Trend Down: CE Safe"
+            elif typ == "PE" and spot > ema20:
+                tech_note = "Trend Up: PE Safe"
+            elif typ == "CE" and spot > ema20:
+                tech_note = "Bullish momentum: Watch CE"
+            elif typ == "PE" and spot < ema20:
+                tech_note = "Bearish momentum: Watch PE"
+
         prem_pct = ltp / spot * 100
         picks.append({
             "contract": f"{sym} {k:g} {typ}", "type": typ, "strike": k, "ltp": round(ltp, 2),
-            "pop": round(pop, 1), "delta": round(d, 2), "iv": round(float(g.get("impliedVolatility") or 0), 1),
+            "pop": pop, "pot": pot, "delta": round(d, 2), "iv": iv,
+            "ivr": ivr, "ivp": ivp,
+            "exp_move": exp_move, "is_outside_sd": is_outside_sd,
+            "sd_boundary": upper_sd if typ == "CE" else lower_sd,
+            "tech_note": tech_note,
             "dist_pct": round(abs(k - spot) / spot * 100, 2),
             "lot": lot, "premium_lot": round(ltp * lot, 2),
             "sl_price": round(ltp * SL_MULTIPLE, 2),
             "loss_at_sl": round(ltp * (SL_MULTIPLE - 1) * lot, 2),
             "breakeven": round(k - ltp if typ == "PE" else k + ltp, 2),
             "oi": oi, "vol": vol, "spread_pct": round(spread, 2),
-            "score": round(pop / 100 * prem_pct, 3),
+            "score": round((pop / 100 * prem_pct) * (1 + (ivr / 100)), 3),
         })
     picks.sort(key=lambda p: p["score"], reverse=True)
-    return {"symbol": sym, "spot": spot, "expiry": exp.isoformat(), "days": (exp - dt.date.today()).days,
-            "warnings": warn, "picks": picks[:8]}
+    return {"symbol": sym, "spot": spot, "expiry": exp.isoformat(), "days": days_to_exp,
+            "ema20": ema20, "warnings": warn, "picks": picks[:8]}
 
 
 app = FastAPI()
@@ -249,7 +365,7 @@ def calculate_pnl(data: dict, x_key: str = Header(default="")):
     symbol = str(data.get("symbol", "NIFTY")).strip().upper()
     strike = float(data.get("strike", 0))
     entry_premium = float(data.get("entry_premium", 0))
-    expiry_date_str = data.get("expiry_date", "")  # format: YYYY-MM-DD
+    expiry_date_str = data.get("expiry_date", "")
     option_type = data.get("option_type", "CE").upper()
     lot_size = int(data.get("lot_size", 1))
     manual_expiry_price = data.get("expiry_price")
@@ -263,7 +379,6 @@ def calculate_pnl(data: dict, x_key: str = Header(default="")):
             a, rows = api(), master()
             token, seg = get_token_for_symbol(rows, symbol)
             
-            # Fetch daily candle for that date
             c_params = {
                 "exchange": seg,
                 "symboltoken": token,
@@ -274,7 +389,6 @@ def calculate_pnl(data: dict, x_key: str = Header(default="")):
             res = a.getCandleData(c_params)
             candles = res.get("data") or []
             if candles:
-                # Candle format: [timestamp, open, high, low, close, volume]
                 closing_price = float(candles[-1][4])
         except Exception as e:
             reset_session()
@@ -283,7 +397,6 @@ def calculate_pnl(data: dict, x_key: str = Header(default="")):
     if closing_price is None:
         return {"status": "error", "message": "Expiry date ka closing data nahi mila. Expiry/CMP Price manually daalein."}
 
-    # Calculate Intrinsic Value at expiry
     if option_type == "CE":
         intrinsic_val = max(0.0, closing_price - strike)
     else:
