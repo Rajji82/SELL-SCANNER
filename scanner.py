@@ -235,25 +235,28 @@ def auto(refresh: bool = False, x_key: str = Header(default="")):
         raise HTTPException(401, "galat password")
     with _auto_lock:
         old = _auto["ts"] is None or time.time() - _auto["ts"] > 900
-        # ---- Backtest & P&L Simulator Endpoint ----
+        if not _auto["running"] and (refresh or old):
+            _auto.update(running=True, ts=time.time())
+            threading.Thread(target=_auto_run, daemon=True).start()
+    return {k: _auto[k] for k in ("running", "done", "total", "updated", "picks", "errors")}
+
+
+# ---- Backtest & P&L Simulator Endpoint ----
 @app.post("/api/backtest")
-def calculate_pnl(data: dict, authorization: str = Header(None)):
-    if APP_TOKEN and authorization != f"Bearer {APP_TOKEN}":
+def calculate_pnl(data: dict, x_key: str = Header(default="")):
+    if APP_TOKEN and x_key != APP_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    
     strike = float(data.get("strike", 0))
     entry_premium = float(data.get("entry_premium", 0))
     expiry_price = float(data.get("expiry_price", 0))
     option_type = data.get("option_type", "CE").upper()
     lot_size = int(data.get("lot_size", 1))
 
-    # Intrinsic value at expiry
     if option_type == "CE":
         intrinsic_val = max(0.0, expiry_price - strike)
     else:
         intrinsic_val = max(0.0, strike - expiry_price)
 
-    # Net P&L per share & total
     pnl_per_share = entry_premium - intrinsic_val
     total_pnl = round(pnl_per_share * lot_size, 2)
     roi_pct = round((pnl_per_share / entry_premium) * 100, 2) if entry_premium > 0 else 0.0
@@ -269,7 +272,3 @@ def calculate_pnl(data: dict, authorization: str = Header(None)):
         "roi_pct": roi_pct,
         "verdict": "PROFIT" if total_pnl >= 0 else "LOSS"
     }
-        if not _auto["running"] and (refresh or old):
-            _auto.update(running=True, ts=time.time())
-            threading.Thread(target=_auto_run, daemon=True).start()
-    return {k: _auto[k] for k in ("running", "done", "total", "updated", "picks", "errors")}
