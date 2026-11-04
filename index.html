@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#14181f">
 <title>Pro Option Sell Scanner</title>
+<!-- TradingView Widget Script -->
+<script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 <style>
 :root{--bg:#eef1f5;--card:#fff;--ink:#1b2330;--mute:#667085;--line:#dde2ea;--ok:#1f7a45;--warn:#b45f06;--accent:#2f4bb8;color-scheme:light}
 @media (prefers-color-scheme:dark){:root{--bg:#14181f;--card:#1d232d;--ink:#e8ecf3;--mute:#98a2b3;--line:#2c3441;--ok:#4cc38a;--warn:#f0a53c;--accent:#8aa4ff;color-scheme:dark}}
@@ -20,8 +22,8 @@ button:disabled{opacity:.6}
 .sym{margin:18px 0 8px;display:flex;justify-content:space-between;align-items:baseline}
 .sym b{font-size:17px}.mute{color:var(--mute);font-size:13px}
 .warn{color:var(--warn);font-size:13px;margin:4px 0}
-.opt{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px}
-.top{display:flex;justify-content:space-between;gap:8px;font-weight:600}
+.opt{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+.top{display:flex;justify-content:space-between;gap:8px;font-weight:600;align-items:center}
 .pop{height:8px;border-radius:4px;background:var(--line);margin:8px 0;overflow:hidden}
 .pop i{display:block;height:100%;background:var(--ok)}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:3px 12px;font-size:13px}
@@ -31,14 +33,15 @@ button#auto{background:var(--ok);color:#fff}
 @media (prefers-color-scheme:dark){button#auto{color:#0b1b12}}
 .note{margin-top:20px;font-size:12px;color:var(--mute)}
 
-/* Badges for 5 Features */
-.badge-group{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}
+/* Badges & Chart Button */
+.badge-group{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0;align-items:center}
 .badge{padding:2px 6px;border-radius:4px;font-size:11px;font-weight:bold}
 .badge-hot{background:#ffebee;color:#c62828}
 .badge-cold{background:#fff3e0;color:#ef6c00}
 .badge-sd{background:#e8f5e9;color:#2e7d32}
 .badge-tech{background:#e3f2fd;color:#1565c0}
 .badge-pot{background:#f3e5f5;color:#7b1fa2}
+.btn-chart{padding:3px 8px;font-size:11px;border-radius:4px;background:var(--card);color:var(--accent);border:1px solid var(--accent);cursor:pointer;margin-left:auto}
 
 @media (prefers-color-scheme:dark){
   .badge-hot{background:#441a1d;color:#ff8a80}
@@ -47,6 +50,8 @@ button#auto{background:var(--ok);color:#fff}
   .badge-tech{background:#182b49;color:#90caf9}
   .badge-pot{background:#381c3d;color:#ce93d8}
 }
+
+.chart-container{margin-top:10px;height:340px;border-radius:8px;overflow:hidden;border:1px solid var(--line);display:none}
 
 .bt-box{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:14px;margin-top:24px}
 .bt-grid{display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:10px}
@@ -121,7 +126,11 @@ async function scan(){
   $("go").disabled=false;
 }
 
-function card(p){
+let cardCounter = 0;
+
+function card(p, sym){
+  cardCounter++;
+  const cId = "tv_chart_" + cardCounter;
   let badges = [];
   if(p.ivr >= 50) badges.push('<span class="badge badge-hot">🔥 High IVR '+p.ivr+'%</span>');
   else if(p.ivr < 25) badges.push('<span class="badge badge-cold">⚠️ Low IVR '+p.ivr+'%</span>');
@@ -131,14 +140,18 @@ function card(p){
   badges.push('<span class="badge badge-pot">⚡ POT: '+p.pot+'%</span>');
 
   return '<div class="opt"><div class="top"><span>SELL '+esc(p.contract)+' @ '+p.ltp+'</span><span>POP '+p.pop+'%</span></div>'
-  +'<div class="badge-group">' + badges.join("") + '</div>'
+  +'<div class="badge-group">' + badges.join("") 
+  + '<button class="btn-chart" onclick="toggleChart(\''+cId+'\', \''+esc(sym)+'\')">📊 Chart</button>'
+  +'</div>'
   +'<div class="pop"><i style="width:'+p.pop+'%"></i></div><div class="grid">'
   +'<div><span>Premium/lot </span>₹'+p.premium_lot+'</div><div><span>Lot </span>'+p.lot+'</div>'
   +'<div><span>Stop-loss </span>'+p.sl_price+'</div><div><span>SL par nuksaan </span>₹'+p.loss_at_sl+'</div>'
   +'<div><span>Breakeven </span>'+p.breakeven+'</div><div><span>Spot se door </span>'+p.dist_pct+'%</div>'
   +'<div><span>Expected Move </span>±₹'+p.exp_move+'</div><div><span>Touch Risk (POT) </span>'+p.pot+'%</div>'
   +'<div><span>IV / IVP </span>'+esc(p.iv)+' / '+p.ivp+'%</div><div><span>OI / Vol </span>'+p.oi+' / '+p.vol+'</div>'
-  +'<div><span>Spread </span>'+p.spread_pct+'%</div></div></div>';
+  +'<div><span>Spread </span>'+p.spread_pct+'%</div></div>'
+  +'<div id="'+cId+'" class="chart-container"></div>'
+  +'</div>';
 }
 
 function render(d){
@@ -149,9 +162,43 @@ function render(d){
     h+='<div class="sym"><b>'+esc(s.symbol)+' '+s.spot+'</b><span class="mute">Expiry '+esc(s.expiry)+' ('+s.days+' din)'+emaInfo+'</span></div>';
     for(const w of s.warnings)h+='<div class="warn">'+esc(w)+'</div>';
     if(!s.picks.length)h+='<div class="mute">Filter ke hisaab se koi achha strike nahi mila.</div>';
-    for(const p of s.picks)h+=card(p);
+    for(const p of s.picks)h+=card(p, s.symbol);
   }
   $("out").innerHTML=h;
+}
+
+// Chart toggle and loader
+const activeCharts = {};
+function toggleChart(cId, symbol){
+  const el = document.getElementById(cId);
+  if(!el) return;
+  if(el.style.display === "block"){
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "block";
+  if(!activeCharts[cId]){
+    let tvSym = "NSE:" + symbol;
+    if(symbol === "NIFTY") tvSym = "NSE:NIFTY50";
+    else if(symbol === "BANKNIFTY") tvSym = "NSE:BANKNIFTY";
+
+    const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    new TradingView.widget({
+      "autosize": true,
+      "symbol": tvSym,
+      "interval": "D",
+      "timezone": "Asia/Kolkata",
+      "theme": isDark ? "dark" : "light",
+      "style": "1",
+      "locale": "in",
+      "enable_publishing": false,
+      "hide_top_toolbar": false,
+      "hide_legend": true,
+      "save_image": false,
+      "container_id": cId
+    });
+    activeCharts[cId] = true;
+  }
 }
 
 $("go").onclick=scan;
@@ -174,7 +221,7 @@ function renderAuto(d){
   for(const p of d.picks){
     h+='<div class="sym"><b>'+esc(p.symbol)+' '+p.spot+'</b><span class="mute">Expiry '+esc(p.expiry)+' ('+p.days+' din)</span></div>';
     for(const w of p.warnings)h+='<div class="warn">'+esc(w)+'</div>';
-    h+=card(p);
+    h+=card(p, p.symbol);
   }
   $("out").innerHTML=h;
 }
