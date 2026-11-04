@@ -4,17 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#14181f">
-<title>Option Sell Scanner</title>
+<title>Option Sell Scanner & Backtest</title>
 <style>
 :root{--bg:#eef1f5;--card:#fff;--ink:#1b2330;--mute:#667085;--line:#dde2ea;--ok:#1f7a45;--warn:#b45f06;--accent:#2f4bb8;color-scheme:light}
 @media (prefers-color-scheme:dark){:root{--bg:#14181f;--card:#1d232d;--ink:#e8ecf3;--mute:#98a2b3;--line:#2c3441;--ok:#4cc38a;--warn:#f0a53c;--accent:#8aa4ff;color-scheme:dark}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif;padding:max(14px,env(safe-area-inset-top)) 14px 40px}
 h1{font-size:20px;margin:0 0 12px}
+h2{font-size:16px;margin:18px 0 10px}
 .bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
-input,button{font:inherit;border-radius:8px;border:1px solid var(--line);padding:10px 12px;background:var(--card);color:var(--ink)}
+input,select,button{font:inherit;border-radius:8px;border:1px solid var(--line);padding:10px 12px;background:var(--card);color:var(--ink)}
 input{flex:1 1 200px}
-button{background:var(--accent);color:#fff;border:0;font-weight:600}
+button{background:var(--accent);color:#fff;border:0;font-weight:600;cursor:pointer}
 button:disabled{opacity:.6}
 .sym{margin:18px 0 8px;display:flex;justify-content:space-between;align-items:baseline}
 .sym b{font-size:17px}.mute{color:var(--mute);font-size:13px}
@@ -29,21 +30,63 @@ button:disabled{opacity:.6}
 button#auto{background:var(--ok);color:#fff}
 @media (prefers-color-scheme:dark){button#auto{color:#0b1b12}}
 .note{margin-top:20px;font-size:12px;color:var(--mute)}
+
+/* Backtest Box styling */
+.bt-box{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:14px;margin-top:24px}
+.bt-grid{display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:10px}
+.bt-field label{display:block;font-size:12px;color:var(--mute);margin-bottom:4px}
+.bt-field input,.bt-field select{width:100%}
+#bt_result{margin-top:12px;display:none;padding:12px;border-radius:8px;font-size:14px;line-height:1.5}
 </style>
 </head>
 <body>
-<h1>Option sell scanner</h1>
+<h1>Option Sell Scanner</h1>
 <div class="bar">
   <input id="syms" value="NIFTY,BANKNIFTY,RELIANCE,HDFCBANK" aria-label="Symbols, comma se alag">
   <button id="go">Scan karo</button>
   <button id="auto">Auto scan</button>
 </div>
 <div id="out" class="mute">Symbols likhkar "Scan karo" dabao. Stocks mein 1 symbol ~5 second leta hai.</div>
+
+<!-- Backtest & P&L Calculator Section -->
+<div class="bt-box">
+  <h2 style="margin-top:0;">Option Sell P&L & Backtest Simulator</h2>
+  <div class="bt-grid">
+    <div class="bt-field">
+      <label>Strike Price</label>
+      <input type="number" id="bt_strike" placeholder="e.g. 24000">
+    </div>
+    <div class="bt-field">
+      <label>Option Type</label>
+      <select id="bt_type">
+        <option value="CE">Call (CE)</option>
+        <option value="PE">Put (PE)</option>
+      </select>
+    </div>
+    <div class="bt-field">
+      <label>Sell Premium (₹)</label>
+      <input type="number" id="bt_premium" step="0.05" placeholder="e.g. 85">
+    </div>
+    <div class="bt-field">
+      <label>Expiry/CMP Price</label>
+      <input type="number" id="bt_expiry" step="0.05" placeholder="e.g. 23850">
+    </div>
+    <div class="bt-field">
+      <label>Lot Size</label>
+      <input type="number" id="bt_lot" value="25" placeholder="e.g. 25">
+    </div>
+  </div>
+  <button onclick="runBacktest()" style="margin-top:12px;width:100%;">Check Profit / Loss</button>
+  <div id="bt_result"></div>
+</div>
+
 <p class="note">POP delta se nikala gaya andaaza hai, guarantee nahi. Option selling mein nuksaan asaleel roop se bahut bada ho sakta hai. Stop-loss sirf suggestion hai, ye app order nahi daalta.</p>
+
 <script>
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let key=localStorage.getItem("key")||"";
+
 async function scan(){
   $("go").disabled=true;$("out").textContent="Scan ho raha hai...";
   try{
@@ -53,6 +96,7 @@ async function scan(){
   }catch(e){$("out").innerHTML='<span class="err">Server se connect nahi hua. Check karo scanner chal raha hai.</span>';}
   $("go").disabled=false;
 }
+
 function card(p){
   return '<div class="opt"><div class="top"><span>SELL '+esc(p.contract)+' @ '+p.ltp+'</span><span>POP '+p.pop+'%</span></div>'
   +'<div class="pop"><i style="width:'+p.pop+'%"></i></div><div class="grid">'
@@ -62,6 +106,7 @@ function card(p){
   +'<div><span>Delta </span>'+p.delta+'</div><div><span>IV </span>'+esc(p.iv)+'</div>'
   +'<div><span>OI </span>'+p.oi+'</div><div><span>Spread </span>'+p.spread_pct+'%</div></div></div>';
 }
+
 function render(d){
   let h='<div class="mute">Update: '+esc(d.time)+'</div>';
   for(const s of d.results){
@@ -73,7 +118,9 @@ function render(d){
   }
   $("out").innerHTML=h;
 }
+
 $("go").onclick=scan;
+
 let timer=null;
 async function auto(refresh){
   clearTimeout(timer);
@@ -84,6 +131,7 @@ async function auto(refresh){
     if(d.running)timer=setTimeout(()=>auto(false),4000);
   }catch(e){$("out").innerHTML='<span class="err">Server se connect nahi hua. Check karo scanner chal raha hai.</span>';}
 }
+
 function renderAuto(d){
   let h='<div class="mute">'+(d.running?'Scan chal raha hai: '+d.done+'/'+d.total+' symbol (zyada se zyada 3-4 minute)':'Poora hua: '+esc(d.updated||'-'))+'</div>';
   if(d.errors.length)h+='<div class="warn">'+d.errors.length+' symbol skip hue: '+esc(d.errors.slice(0,2).join("; "))+'</div>';
@@ -95,8 +143,83 @@ function renderAuto(d){
   }
   $("out").innerHTML=h;
 }
+
 $("auto").onclick=()=>auto(true);
 
+// Backtest & P&L Execution Logic
+async function runBacktest(){
+  const strike = parseFloat($("bt_strike").value);
+  const premium = parseFloat($("bt_premium").value);
+  const expiry = parseFloat($("bt_expiry").value);
+  const lot = parseInt($("bt_lot").value) || 1;
+  const type = $("bt_type").value;
+  const resDiv = $("bt_result");
+
+  if(isNaN(strike) || isNaN(premium) || isNaN(expiry)){
+    resDiv.style.display = "block";
+    resDiv.style.background = "rgba(180, 95, 6, 0.15)";
+    resDiv.style.color = "var(--warn)";
+    resDiv.innerHTML = "Kripya Strike, Premium aur Expiry price theek se bharein.";
+    return;
+  }
+
+  try {
+    const r = await fetch("/api/backtest", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-key": key
+      },
+      body: JSON.stringify({
+        strike: strike,
+        entry_premium: premium,
+        expiry_price: expiry,
+        option_type: type,
+        lot_size: lot
+      })
+    });
+
+    if(r.status === 401){
+      key = prompt("App password daalo") || "";
+      localStorage.setItem("key", key);
+      return runBacktest();
+    }
+
+    const data = await r.json();
+    resDiv.style.display = "block";
+
+    if(data.status === "success"){
+      const isProfit = data.total_pnl >= 0;
+      resDiv.style.background = isProfit ? "rgba(31, 122, 69, 0.15)" : "rgba(220, 53, 69, 0.15)";
+      resDiv.style.color = isProfit ? "var(--ok)" : "#e63946";
+      resDiv.innerHTML = `
+        <b>Nateeja: ${data.verdict === 'PROFIT' ? 'Munafa (PROFIT)' : 'Nuksaan (LOSS)'}</b><br>
+        Total P&L: <b>₹${data.total_pnl}</b> (${data.roi_pct}% of premium)<br>
+        P&L Per Share: ₹${data.pnl_per_share} | Expiry Intrinsic Value: ₹${data.intrinsic_value}
+      `;
+    } else {
+      resDiv.style.background = "rgba(220, 53, 69, 0.15)";
+      resDiv.style.color = "#e63946";
+      resDiv.innerHTML = "Calculation fail ho gayi. Dobara koshish karein.";
+    }
+  } catch(e) {
+    // Agar backend par abhi endpoint add nahi hua hai, to frontend par hi calculate karke dikha dega
+    const intrinsic = type === "CE" ? Math.max(0, expiry - strike) : Math.max(0, strike - expiry);
+    const pnlPerShare = premium - intrinsic;
+    const totalPnl = Math.round(pnlPerShare * lot * 100) / 100;
+    const roi = Math.round((pnlPerShare / premium) * 10000) / 100;
+    const isProfit = totalPnl >= 0;
+
+    resDiv.style.display = "block";
+    resDiv.style.background = isProfit ? "rgba(31, 122, 69, 0.15)" : "rgba(220, 53, 69, 0.15)";
+    resDiv.style.color = isProfit ? "var(--ok)" : "#e63946";
+    resDiv.innerHTML = `
+      <b>Nateeja: ${isProfit ? 'Munafa (PROFIT)' : 'Nuksaan (LOSS)'}</b> (Offline Mode)<br>
+      Total P&L: <b>₹${totalPnl}</b> (${roi}% of premium)<br>
+      P&L Per Share: ₹${Math.round(pnlPerShare*100)/100} | Expiry Intrinsic Value: ₹${intrinsic}
+    `;
+  }
+}
 </script>
 </body>
 </html>
