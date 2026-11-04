@@ -31,7 +31,6 @@ button#auto{background:var(--ok);color:#fff}
 @media (prefers-color-scheme:dark){button#auto{color:#0b1b12}}
 .note{margin-top:20px;font-size:12px;color:var(--mute)}
 
-/* Backtest Box styling */
 .bt-box{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:14px;margin-top:24px}
 .bt-grid{display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:10px}
 .bt-field label{display:block;font-size:12px;color:var(--mute);margin-bottom:4px}
@@ -50,11 +49,15 @@ button#auto{background:var(--ok);color:#fff}
 
 <!-- Backtest & P&L Calculator Section -->
 <div class="bt-box">
-  <h2 style="margin-top:0;">Option Sell P&L & Backtest Simulator</h2>
+  <h2 style="margin-top:0;">Option Sell Historical Backtest & P&L</h2>
   <div class="bt-grid">
     <div class="bt-field">
+      <label>Symbol / Share</label>
+      <input type="text" id="bt_symbol" value="LUPIN" placeholder="e.g. LUPIN, NIFTY">
+    </div>
+    <div class="bt-field">
       <label>Strike Price</label>
-      <input type="number" id="bt_strike" placeholder="e.g. 24000">
+      <input type="number" id="bt_strike" placeholder="e.g. 2000">
     </div>
     <div class="bt-field">
       <label>Option Type</label>
@@ -65,18 +68,22 @@ button#auto{background:var(--ok);color:#fff}
     </div>
     <div class="bt-field">
       <label>Sell Premium (₹)</label>
-      <input type="number" id="bt_premium" step="0.05" placeholder="e.g. 85">
+      <input type="number" id="bt_premium" step="0.05" placeholder="e.g. 43">
     </div>
     <div class="bt-field">
-      <label>Expiry/CMP Price</label>
-      <input type="number" id="bt_expiry" step="0.05" placeholder="e.g. 23850">
+      <label>Expiry Date (Backtest)</label>
+      <input type="date" id="bt_date">
     </div>
     <div class="bt-field">
       <label>Lot Size</label>
-      <input type="number" id="bt_lot" value="25" placeholder="e.g. 25">
+      <input type="number" id="bt_lot" value="425" placeholder="e.g. 425">
+    </div>
+    <div class="bt-field">
+      <label>Ya Manual Spot (Optional)</label>
+      <input type="number" id="bt_expiry" step="0.05" placeholder="e.g. 1980">
     </div>
   </div>
-  <button onclick="runBacktest()" style="margin-top:12px;width:100%;">Check Profit / Loss</button>
+  <button onclick="runBacktest()" style="margin-top:12px;width:100%;">Check Historical Profit / Loss</button>
   <div id="bt_result"></div>
 </div>
 
@@ -148,20 +155,27 @@ $("auto").onclick=()=>auto(true);
 
 // Backtest & P&L Execution Logic
 async function runBacktest(){
+  const sym = $("bt_symbol").value.trim().toUpperCase();
   const strike = parseFloat($("bt_strike").value);
   const premium = parseFloat($("bt_premium").value);
-  const expiry = parseFloat($("bt_expiry").value);
+  const expiryDate = $("bt_date").value;
+  const manualSpot = $("bt_expiry").value ? parseFloat($("bt_expiry").value) : null;
   const lot = parseInt($("bt_lot").value) || 1;
   const type = $("bt_type").value;
   const resDiv = $("bt_result");
 
-  if(isNaN(strike) || isNaN(premium) || isNaN(expiry)){
+  if(!sym || isNaN(strike) || isNaN(premium) || (!expiryDate && manualSpot === null)){
     resDiv.style.display = "block";
     resDiv.style.background = "rgba(180, 95, 6, 0.15)";
     resDiv.style.color = "var(--warn)";
-    resDiv.innerHTML = "Kripya Strike, Premium aur Expiry price theek se bharein.";
+    resDiv.innerHTML = "Kripya Symbol, Strike, Premium aur Expiry Date bharein.";
     return;
   }
+
+  resDiv.style.display = "block";
+  resDiv.style.background = "rgba(100, 100, 100, 0.15)";
+  resDiv.style.color = "var(--ink)";
+  resDiv.innerHTML = "Historical data fetch ho raha hai...";
 
   try {
     const r = await fetch("/api/backtest", {
@@ -171,9 +185,11 @@ async function runBacktest(){
         "x-key": key
       },
       body: JSON.stringify({
+        symbol: sym,
         strike: strike,
         entry_premium: premium,
-        expiry_price: expiry,
+        expiry_date: expiryDate,
+        expiry_price: manualSpot,
         option_type: type,
         lot_size: lot
       })
@@ -186,7 +202,6 @@ async function runBacktest(){
     }
 
     const data = await r.json();
-    resDiv.style.display = "block";
 
     if(data.status === "success"){
       const isProfit = data.total_pnl >= 0;
@@ -194,30 +209,19 @@ async function runBacktest(){
       resDiv.style.color = isProfit ? "var(--ok)" : "#e63946";
       resDiv.innerHTML = `
         <b>Nateeja: ${data.verdict === 'PROFIT' ? 'Munafa (PROFIT)' : 'Nuksaan (LOSS)'}</b><br>
+        Expiry Closing Spot: <b>₹${data.expiry_price}</b><br>
         Total P&L: <b>₹${data.total_pnl}</b> (${data.roi_pct}% of premium)<br>
-        P&L Per Share: ₹${data.pnl_per_share} | Expiry Intrinsic Value: ₹${data.intrinsic_value}
+        P&L Per Share: ₹${data.pnl_per_share} | Intrinsic Value: ₹${data.intrinsic_value}
       `;
     } else {
       resDiv.style.background = "rgba(220, 53, 69, 0.15)";
       resDiv.style.color = "#e63946";
-      resDiv.innerHTML = "Calculation fail ho gayi. Dobara koshish karein.";
+      resDiv.innerHTML = data.message || "Calculation fail ho gayi. Dobara koshish karein.";
     }
   } catch(e) {
-    // Agar backend par abhi endpoint add nahi hua hai, to frontend par hi calculate karke dikha dega
-    const intrinsic = type === "CE" ? Math.max(0, expiry - strike) : Math.max(0, strike - expiry);
-    const pnlPerShare = premium - intrinsic;
-    const totalPnl = Math.round(pnlPerShare * lot * 100) / 100;
-    const roi = Math.round((pnlPerShare / premium) * 10000) / 100;
-    const isProfit = totalPnl >= 0;
-
-    resDiv.style.display = "block";
-    resDiv.style.background = isProfit ? "rgba(31, 122, 69, 0.15)" : "rgba(220, 53, 69, 0.15)";
-    resDiv.style.color = isProfit ? "var(--ok)" : "#e63946";
-    resDiv.innerHTML = `
-      <b>Nateeja: ${isProfit ? 'Munafa (PROFIT)' : 'Nuksaan (LOSS)'}</b> (Offline Mode)<br>
-      Total P&L: <b>₹${totalPnl}</b> (${roi}% of premium)<br>
-      P&L Per Share: ₹${Math.round(pnlPerShare*100)/100} | Expiry Intrinsic Value: ₹${intrinsic}
-    `;
+    resDiv.style.background = "rgba(220, 53, 69, 0.15)";
+    resDiv.style.color = "#e63946";
+    resDiv.innerHTML = "Server se connect nahi hua. Check karein backend chal raha hai.";
   }
 }
 </script>
