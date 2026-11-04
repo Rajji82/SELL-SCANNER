@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>AlphaOption Pro | Scanner & Auto-Trading Bot</title>
+<title>AlphaOption Pro | Terminal Suite</title>
 <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -50,7 +50,7 @@ header {
   justify-content: space-between;
   align-items: center;
 }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 16px; letter-spacing: -0.5px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 16px; }
 .brand-badge { background: linear-gradient(135deg, var(--accent), #7928ca); padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; color: #fff; }
 .market-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--mute); font-family: var(--font-mono); }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok); }
@@ -85,8 +85,7 @@ header {
 .input-group { flex: 1 1 240px; }
 input, select {
   width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 8px;
-  color: var(--ink); font-family: var(--font-sans); font-size: 13px; padding: 10px 14px;
-  outline: none;
+  color: var(--ink); font-family: var(--font-sans); font-size: 13px; padding: 10px 14px; outline: none;
 }
 input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
 .btn {
@@ -138,6 +137,7 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 .tag-hot { background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(246,70,93,0.3); }
 .tag-safe { background: var(--ok-bg); color: var(--ok); border: 1px solid rgba(14,203,129,0.3); }
 .tag-blue { background: rgba(56, 97, 251, 0.15); color: #7997fc; border: 1px solid rgba(56,97,251,0.3); }
+.tag-margin { background: rgba(245, 166, 35, 0.12); color: var(--warn); border: 1px solid rgba(245,166,35,0.3); }
 
 .pop-bar { height: 4px; background: var(--card); border-radius: 2px; overflow: hidden; }
 .pop-fill { height: 100%; background: var(--ok); border-radius: 2px; }
@@ -155,6 +155,11 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 }
 .news-ticker b { color: var(--ink); }
 .tv-frame-wrap { height: 360px; border-radius: 8px; overflow: hidden; margin-top: 10px; display: none; border: 1px solid var(--border); }
+
+/* Ledger Table */
+.ledger-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 12px; margin-top: 12px; }
+.ledger-table th, .ledger-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+.ledger-table th { color: var(--mute); font-family: var(--font-sans); text-transform: uppercase; font-size: 11px; }
 
 /* SEBI Modal */
 .modal-overlay {
@@ -195,7 +200,7 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 <header>
   <div class="brand">
     <span class="brand-badge">PRO</span>
-    <span>AlphaOption Bot</span>
+    <span>AlphaOption Terminal</span>
   </div>
   <div class="market-status">
     <div class="status-dot"></div>
@@ -252,6 +257,17 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
         <input type="number" id="bot_target" value="1000" step="100">
       </div>
       <div class="param-box">
+        <label>Theta Exit (% Decay)</label>
+        <input type="number" id="bot_decay_pct" value="50" step="5">
+      </div>
+      <div class="param-box">
+        <label>Use % Decay Exit?</label>
+        <select id="bot_use_decay">
+          <option value="false">Fixed ₹ Target</option>
+          <option value="true">Theta % Decay</option>
+        </select>
+      </div>
+      <div class="param-box">
         <label>Per-Trade SL (₹)</label>
         <input type="number" id="bot_tradesl" value="1200" step="100">
       </div>
@@ -289,7 +305,7 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
       </div>
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:8px;">
         <div class="live-pnl-pill" id="live_pnl_val">+₹0.00</div>
-        <div style="font-size:12px;color:var(--mute);font-family:var(--font-mono);" id="live_details">Entry: - | LTP: - | SL: -</div>
+        <div style="font-size:12px;color:var(--mute);font-family:var(--font-mono);" id="live_details">Entry: - | LTP: - | Decay: 0%</div>
       </div>
     </div>
   </div>
@@ -297,6 +313,7 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
   <!-- Tabs Navigation -->
   <div class="tab-bar">
     <button class="tab-btn active" id="tab_scan" onclick="switchTab('scanner')">Live Opportunities</button>
+    <button class="tab-btn" id="tab_ledger" onclick="switchTab('ledger')">Trade Analytics Ledger</button>
     <button class="tab-btn" id="tab_bt" onclick="switchTab('backtest')">Historical Backtester</button>
   </div>
 
@@ -314,7 +331,40 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
     <div id="out" class="cards-grid"></div>
   </div>
 
-  <!-- TAB 2: BACKTEST -->
+  <!-- TAB 2: LEDGER -->
+  <div id="view_ledger" style="display:none;">
+    <div class="bot-dock" style="background:var(--panel);">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <h3 style="font-size:15px;font-weight:700;">Performance Ledger & Audit Journal</h3>
+          <p style="font-size:12px;color:var(--mute);">Full execution history with timestamped exit reasons</p>
+        </div>
+        <button class="btn btn-outline" onclick="downloadLedgerCSV()">📥 Export to CSV</button>
+      </div>
+
+      <div style="overflow-x:auto;margin-top:14px;">
+        <table class="ledger-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Contract</th>
+              <th>Entry (₹)</th>
+              <th>Exit Time</th>
+              <th>Lot</th>
+              <th>P&L (₹)</th>
+              <th>Exit Reason</th>
+              <th>Type</th>
+            </tr>
+          </thead>
+          <tbody id="ledger_body">
+            <tr><td colspan="8" style="color:var(--mute);text-align:center;padding:16px;">No closed trades logged yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 3: BACKTEST -->
   <div id="view_backtest" style="display:none;">
     <div class="bot-dock" style="background:var(--panel);">
       <h3 style="margin-bottom:12px;font-size:15px;font-weight:700;">Historical Option P&L Simulation</h3>
@@ -381,8 +431,11 @@ function acceptTerms() {
 
 function switchTab(t) {
   $('tab_scan').classList.toggle('active', t === 'scanner');
+  $('tab_ledger').classList.toggle('active', t === 'ledger');
   $('tab_bt').classList.toggle('active', t === 'backtest');
+  
   $('view_scanner').style.display = t === 'scanner' ? 'block' : 'none';
+  $('view_ledger').style.display = t === 'ledger' ? 'block' : 'none';
   $('view_backtest').style.display = t === 'backtest' ? 'block' : 'none';
 }
 
@@ -401,6 +454,7 @@ function card(p, sym) {
   if (p.ivr >= 50) tags.push('<span class="tag tag-hot">🔥 High IVR '+p.ivr+'%</span>');
   if (p.is_outside_sd) tags.push('<span class="tag tag-safe">🛡️ Safe 1-SD</span>');
   if (p.tech_note) tags.push('<span class="tag tag-blue">'+esc(p.tech_note)+'</span>');
+  tags.push('<span class="tag tag-margin">⚡ Margin: ~₹'+(p.spread_margin ? p.spread_margin.toLocaleString('en-IN') : '-')+'</span>');
 
   return `
   <div class="opp-card">
@@ -431,6 +485,9 @@ function card(p, sym) {
       <div style="display:flex;justify-content:space-between;font-family:var(--font-mono);">
         <span>Net Credit: ₹${p.net_credit}</span>
         <span>Capped Loss: ₹${p.spread_loss}</span>
+      </div>
+      <div style="font-size:11px;color:var(--mute);margin-top:4px;">
+        Naked Margin: ₹${p.naked_margin ? p.naked_margin.toLocaleString('en-IN') : '-'} | Spread Margin: ₹${p.spread_margin ? p.spread_margin.toLocaleString('en-IN') : '-'}
       </div>
     </div>
 
@@ -516,6 +573,8 @@ async function saveBotSettings() {
     enabled: $("bot_toggle").checked,
     paper_mode: $("bot_paper").checked,
     target_profit: parseFloat($("bot_target").value) || 1000,
+    decay_target_pct: parseFloat($("bot_decay_pct").value) || 50,
+    use_decay_pct: $("bot_use_decay").value === "true",
     max_loss_per_trade: parseFloat($("bot_tradesl").value) || 1200,
     daily_loss_limit: parseFloat($("bot_kill").value) || 2000,
     trail_trigger: parseFloat($("bot_trail").value) || 1000,
@@ -548,6 +607,10 @@ async function unlockKillSwitch() {
   await fetch("/api/bot/reset_kill_switch", { method: "POST", headers: { "x-key": key } });
 }
 
+function downloadLedgerCSV() {
+  window.open("/api/bot/export-ledger", "_blank");
+}
+
 setInterval(async () => {
   try {
     const r = await fetch("/api/bot/status", { headers: { "x-key": key } });
@@ -578,9 +641,28 @@ setInterval(async () => {
       const isProf = tr.current_pnl >= 0;
       $('live_pnl_val').textContent = (isProf ? "+" : "") + "₹" + tr.current_pnl.toFixed(2);
       $('live_pnl_val').style.color = isProf ? "var(--ok)" : "var(--danger)";
-      $('live_details').textContent = `Entry: ₹${tr.entry_price} | LTP: ₹${tr.current_ltp} | SL: ₹${tr.sl_price} ${tr.trailed ? '(Trailed)' : ''}`;
+      $('live_details').textContent = `Entry: ₹${tr.entry_price} | LTP: ₹${tr.current_ltp} | Decay: ${tr.decay_pct || 0}%`;
     } else {
       box.style.display = 'none';
+    }
+
+    // Populate Ledger Table
+    if (d.history && d.history.length) {
+      let lHtml = '';
+      for (const h of d.history) {
+        const isProf = h.current_pnl >= 0;
+        lHtml += `<tr>
+          <td>${h.entry_date || '-'}</td>
+          <td><b>${esc(h.contract)}</b></td>
+          <td>₹${h.entry_price}</td>
+          <td>${h.exit_time || '-'}</td>
+          <td>${h.lot_size}</td>
+          <td style="color:${isProf ? 'var(--ok)' : 'var(--danger)'};font-weight:700;">${isProf ? '+' : ''}₹${h.current_pnl}</td>
+          <td><span style="font-size:11px;color:var(--mute);">${esc(h.reason || '-')}</span></td>
+          <td><span class="tag ${h.paper ? 'tag-safe' : 'tag-hot'}">${h.paper ? 'PAPER' : 'REAL'}</span></td>
+        </tr>`;
+      }
+      $('ledger_body').innerHTML = lHtml;
     }
   } catch(e) {}
 }, 2000);
