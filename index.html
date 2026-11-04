@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#14181f">
-<title>Pro Option Sell Scanner (Spreads & News)</title>
+<title>Pro Option Sell Scanner & Bot</title>
 <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 <style>
 :root{--bg:#eef1f5;--card:#fff;--ink:#1b2330;--mute:#667085;--line:#dde2ea;--ok:#1f7a45;--warn:#b45f06;--accent:#2f4bb8;color-scheme:light}
@@ -42,6 +42,7 @@ button#auto{background:var(--ok);color:#fff}
 .badge-pot{background:#f3e5f5;color:#7b1fa2}
 .badge-spread{background:#fff8e1;color:#f57f17;border:1px dashed #fbc02d}
 .btn-chart{padding:3px 8px;font-size:11px;border-radius:4px;background:var(--card);color:var(--accent);border:1px solid var(--accent);cursor:pointer;margin-left:auto}
+.btn-trade{padding:4px 10px;font-size:12px;border-radius:6px;background:var(--ok);color:#fff;border:0;cursor:pointer}
 
 @media (prefers-color-scheme:dark){
   .badge-hot{background:#441a1d;color:#ff8a80}
@@ -53,11 +54,16 @@ button#auto{background:var(--ok);color:#fff}
 }
 
 .chart-container{margin-top:10px;height:340px;border-radius:8px;overflow:hidden;border:1px solid var(--line);display:none}
-
-/* News Box */
 .news-box{background:rgba(100,100,100,0.08);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:12px}
 .news-title{font-weight:600;margin-bottom:4px;color:var(--accent)}
 .news-box ul{margin:0;padding-left:18px}
+
+/* Automated Trading Bot Control Box */
+.bot-box{background:var(--card);border:2px solid var(--accent);border-radius:12px;padding:14px;margin-bottom:16px}
+.bot-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+.bot-controls{display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:8px;margin-top:10px}
+.bot-controls label{font-size:11px;color:var(--mute);display:block;margin-bottom:3px}
+.live-pnl-card{margin-top:10px;padding:12px;border-radius:8px;background:rgba(31,122,69,0.1);border:1px solid var(--ok);display:none}
 
 .bt-box{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:14px;margin-top:24px}
 .bt-grid{display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:10px}
@@ -67,7 +73,46 @@ button#auto{background:var(--ok);color:#fff}
 </style>
 </head>
 <body>
-<h1>Option Sell Scanner (Pro)</h1>
+<h1>Option Sell Scanner & Bot</h1>
+
+<!-- Automated Bot Controller -->
+<div class="bot-box">
+  <div class="bot-header">
+    <span style="font-size:16px;font-weight:700;">🤖 Auto-Trading Bot Panel</span>
+    <div>
+      <label><input type="checkbox" id="bot_paper" checked> 📄 <b>Paper Trade (Virtual)</b></label>
+      <label style="margin-left:12px;"><input type="checkbox" id="bot_toggle"> ⚡ <b>Enable Bot</b></label>
+    </div>
+  </div>
+  <div class="bot-controls">
+    <div>
+      <label>Target Profit (₹)</label>
+      <input type="number" id="bot_target" value="1500" step="100">
+    </div>
+    <div>
+      <label>Trail SL to Cost at (₹)</label>
+      <input type="number" id="bot_trail" value="1000" step="100">
+    </div>
+    <div>
+      <label>Time Exit (24hr)</label>
+      <input type="text" id="bot_time" value="15:20">
+    </div>
+    <div style="display:flex;align-items:flex-end;">
+      <button onclick="saveBotSettings()" style="width:100%;padding:10px;">Save Settings</button>
+    </div>
+  </div>
+  
+  <div id="live_trade_box" class="live-pnl-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <b id="live_contract">-</b>
+      <button onclick="closeTradeNow()" style="background:#dc3545;padding:4px 8px;font-size:11px;">Square-Off</button>
+    </div>
+    <div style="font-size:20px;font-weight:800;margin:6px 0;" id="live_pnl_val">₹0.00</div>
+    <div style="font-size:12px;color:var(--mute);" id="live_details">Entry: - | LTP: - | SL: -</div>
+  </div>
+  <div id="bot_log" style="font-size:11px;color:var(--mute);margin-top:8px;">Bot Idle.</div>
+</div>
+
 <div class="bar">
   <input id="syms" value="NIFTY,BANKNIFTY,RELIANCE,HDFCBANK" aria-label="Symbols, comma se alag">
   <button id="go">Scan karo</button>
@@ -115,7 +160,7 @@ button#auto{background:var(--ok);color:#fff}
   <div id="bt_result"></div>
 </div>
 
-<p class="note">POP delta se nikala gaya andaaza hai. Spreads hedge hone se capital secure rehta hai aur 70% margin bachta hai. Stop-loss sirf suggestion hai, ye app order nahi daalta.</p>
+<p class="note">POP delta se nikala gaya andaaza hai. Paper Trading mode mein koi asli order nahi lagta. Stop-loss sirf suggestion hai.</p>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -145,9 +190,12 @@ function card(p, sym){
   if(p.tech_note) badges.push('<span class="badge badge-tech">📈 '+esc(p.tech_note)+'</span>');
   badges.push('<span class="badge badge-pot">⚡ POT: '+p.pot+'%</span>');
 
+  const pickData = JSON.stringify(p).replace(/"/g, '&quot;');
+
   return '<div class="opt"><div class="top"><span>SELL '+esc(p.contract)+' @ '+p.ltp+'</span><span>POP '+p.pop+'%</span></div>'
   +'<div class="badge-group">' + badges.join("") 
   + '<button class="btn-chart" onclick="toggleChart(\''+cId+'\', \''+esc(sym)+'\')">📊 Chart</button>'
+  + '<button class="btn-trade" onclick="botTradeNow('+pickData+')">⚡ Bot Trade</button>'
   +'</div>'
   +'<div class="pop"><i style="width:'+p.pop+'%"></i></div><div class="grid">'
   +'<div><span>Premium/lot </span>₹'+p.premium_lot+'</div><div><span>Lot </span>'+p.lot+'</div>'
@@ -170,7 +218,6 @@ function render(d){
   let h='<div class="mute">Update: '+esc(d.time)+'</div>';
   for(const s of d.results){
     if(s.error){h+='<div class="sym"><b>'+esc(s.symbol)+'</b></div><div class="err">'+esc(s.error)+'</div>';continue;}
-    
     let pcrColor = s.pcr > 1 ? 'var(--ok)' : (s.pcr < 0.7 ? 'var(--warn)' : 'var(--ink)');
     h+='<div class="sym"><b>'+esc(s.symbol)+' '+s.spot+'</b>'
       +'<span class="mute">Expiry '+esc(s.expiry)+' ('+s.days+' din) | 20 EMA: ₹'+(s.ema20||'-')
@@ -221,6 +268,61 @@ function toggleChart(cId, symbol){
     activeCharts[cId] = true;
   }
 }
+
+// Bot Control JS
+async function saveBotSettings(){
+  const payload = {
+    enabled: $("bot_toggle").checked,
+    paper_mode: $("bot_paper").checked,
+    target_profit: parseFloat($("bot_target").value) || 1500,
+    trail_trigger: parseFloat($("bot_trail").value) || 1000,
+    time_exit: $("bot_time").value.trim() || "15:20"
+  };
+  await fetch("/api/bot/settings", {
+    method: "POST",
+    headers: {"Content-Type": "application/json", "x-key": key},
+    body: JSON.stringify(payload)
+  });
+  alert("Bot settings successfully save ho gayi!");
+}
+
+async function botTradeNow(pick){
+  const r = await fetch("/api/bot/execute", {
+    method: "POST",
+    headers: {"Content-Type": "application/json", "x-key": key},
+    body: JSON.stringify(pick)
+  });
+  const data = await r.json();
+  if(data.status === "error") alert(data.message);
+  else alert("Trade successfully lag gaya! Live tracking shuru.");
+}
+
+async function closeTradeNow(){
+  if(!confirm("Kya aap sach me position kaatna chahte hain?")) return;
+  await fetch("/api/bot/close", {method: "POST", headers: {"x-key": key}});
+}
+
+// Poll bot status every 2 seconds
+setInterval(async ()=>{
+  try{
+    const r = await fetch("/api/bot/status", {headers: {"x-key": key}});
+    const d = await r.json();
+    if(d.logs && d.logs.length) $("bot_log").textContent = d.logs[0];
+    
+    const tr = d.active_trade;
+    const box = $("live_trade_box");
+    if(tr){
+      box.style.display = "block";
+      $("live_contract").textContent = (tr.paper ? "[PAPER] " : "[REAL] ") + tr.contract;
+      const isProf = tr.current_pnl >= 0;
+      $("live_pnl_val").textContent = (isProf ? "+" : "") + "₹" + tr.current_pnl;
+      $("live_pnl_val").style.color = isProf ? "var(--ok)" : "#e63946";
+      $("live_details").innerHTML = `Entry: ₹${tr.entry_price} | LTP: ₹${tr.current_ltp} | SL: ₹${tr.sl_price} ${tr.trailed ? '(Trailed to Cost)' : ''}`;
+    } else {
+      box.style.display = "none";
+    }
+  }catch(e){}
+}, 2000);
 
 $("go").onclick=scan;
 
