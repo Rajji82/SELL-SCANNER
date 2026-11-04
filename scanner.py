@@ -13,12 +13,10 @@ PIN = os.environ["ANGEL_PIN"]
 TOTP_SECRET = os.environ["ANGEL_TOTP_SECRET"]
 APP_TOKEN = os.getenv("APP_TOKEN", "")  # app kholte waqt ye password maangega
 
-# ---- Filters (apne hisaab se badlo) ----
-DELTA_MIN, DELTA_MAX = 0.10, 0.25   # |delta| band => POP lagbhag 75%-90%
-MAX_SPREAD_PCT = 5.0                # bid-ask spread % se zyada ho to hatao
-MIN_OI, MIN_VOL = 1000, 100         # lot nahi, contracts ka OI/volume
-SL_MULTIPLE = 2.0                   # stop-loss = premium ka 2 guna
-# Results/event ki date yahan likho, jaise {"TCS": "2026-01-09"}. Expiry se pehle ho to warning aayegi.
+DELTA_MIN, DELTA_MAX = 0.10, 0.25
+MAX_SPREAD_PCT = 5.0
+MIN_OI, MIN_VOL = 1000, 100
+SL_MULTIPLE = 2.0
 EVENTS = {}
 
 MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
@@ -70,15 +68,18 @@ def pick_expiry(rows, sym, min_days):
     return ok[0] if ok else None
 
 
-def get_spot(a, rows, sym):
+def get_token_for_symbol(rows, sym):
     if sym in INDEX_TOKENS:
-        tok = INDEX_TOKENS[sym]
-    else:
-        m = [r for r in rows if r["exch_seg"] == "NSE" and r["name"] == sym and r["symbol"].endswith("-EQ")]
-        if not m:
-            raise ValueError("stock ka NSE token nahi mila")
-        tok = m[0]["token"]
-    d = a.getMarketData("LTP", {"NSE": [tok]})
+        return INDEX_TOKENS[sym], "NSE"
+    m = [r for r in rows if r["exch_seg"] == "NSE" and r["name"] == sym and r["symbol"].endswith("-EQ")]
+    if not m:
+        raise ValueError(f"{sym} ka NSE token nahi mila")
+    return m[0]["token"], "NSE"
+
+
+def get_spot(a, rows, sym):
+    tok, seg = get_token_for_symbol(rows, sym)
+    d = a.getMarketData("LTP", {seg: [tok]})
     return float(d["data"]["fetched"][0]["ltp"])
 
 
@@ -89,7 +90,7 @@ def scan_symbol(sym, min_days=3):
         return {"symbol": sym, "error": "expiry nahi mili (symbol sahi hai?)"}
     es = exp.strftime("%d%b%Y").upper()
     spot = get_spot(a, rows, sym)
-    time.sleep(1.1)  # API rate limit
+    time.sleep(1.1)
 
     greeks = a.optionGreek({"name": sym, "expirydate": es}).get("data") or []
     tokens = {}
@@ -135,7 +136,7 @@ def scan_symbol(sym, min_days=3):
         if spread > MAX_SPREAD_PCT or oi < MIN_OI or vol < MIN_VOL:
             continue
         k, typ, lot = float(g["strikePrice"]), g["optionType"], int(m["lotsize"])
-        pop = (1 - d) * 100  # delta se approx; guarantee nahi
+        pop = (1 - d) * 100
         prem_pct = ltp / spot * 100
         picks.append({
             "contract": f"{sym} {k:g} {typ}", "type": typ, "strike": k, "ltp": round(ltp, 2),
@@ -165,7 +166,7 @@ def scan(symbols: str = "NIFTY,BANKNIFTY", min_days: int = 3, x_key: str = Heade
         try:
             with _scan_lock:
                 out.append(scan_symbol(sym, min_days))
-        except Exception as e:  # session expire ho gaya ho to agli baar fresh login
+        except Exception as e:
             reset_session()
             out.append({"symbol": sym, "error": str(e)[:200]})
     return {"time": dt.datetime.now().strftime("%H:%M:%S"), "results": out}
@@ -176,7 +177,6 @@ def home():
     return FileResponse(os.path.join(os.path.dirname(__file__), "index.html"))
 
 
-# ---------------- Auto scan: F&O ke sabse zyada trade hone wale stocks khud dhoondho ----------------
 AUTO_TOP_N = int(os.getenv("AUTO_TOP_N", "20"))
 _scan_lock = threading.Lock()
 _auto_lock = threading.Lock()
@@ -184,7 +184,6 @@ _auto = {"running": False, "done": 0, "total": 0, "updated": None, "ts": None, "
 
 
 def fno_universe(top_n):
-    """F&O wale sab stocks ka aaj ka traded value (bhav x volume) nikaal ke top N chuno."""
     a, rows = api(), master()
     names = {r["name"] for r in rows if r["exch_seg"] == "NFO" and r["instrumenttype"] == "OPTSTK"}
     eq = {r["name"]: r["token"] for r in rows
@@ -241,21 +240,54 @@ def auto(refresh: bool = False, x_key: str = Header(default="")):
     return {k: _auto[k] for k in ("running", "done", "total", "updated", "picks", "errors")}
 
 
-# ---- Backtest & P&L Simulator Endpoint ----
+# ---- Automated Historical Backtest Endpoint ----
 @app.post("/api/backtest")
 def calculate_pnl(data: dict, x_key: str = Header(default="")):
     if APP_TOKEN and x_key != APP_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    symbol = str(data.get("symbol", "NIFTY")).strip().upper()
     strike = float(data.get("strike", 0))
     entry_premium = float(data.get("entry_premium", 0))
-    expiry_price = float(data.get("expiry_price", 0))
+    expiry_date_str = data.get("expiry_date", "")  # format: YYYY-MM-DD
     option_type = data.get("option_type", "CE").upper()
     lot_size = int(data.get("lot_size", 1))
+    manual_expiry_price = data.get("expiry_price")
 
+    closing_price = None
+
+    if manual_expiry_price not in (None, ""):
+        closing_price = float(manual_expiry_price)
+    elif expiry_date_str:
+        try:
+            a, rows = api(), master()
+            token, seg = get_token_for_symbol(rows, symbol)
+            
+            # Fetch daily candle for that date
+            c_params = {
+                "exchange": seg,
+                "symboltoken": token,
+                "interval": "ONE_DAY",
+                "fromdate": f"{expiry_date_str} 09:15",
+                "todate": f"{expiry_date_str} 15:30"
+            }
+            res = a.getCandleData(c_params)
+            candles = res.get("data") or []
+            if candles:
+                # Candle format: [timestamp, open, high, low, close, volume]
+                closing_price = float(candles[-1][4])
+        except Exception as e:
+            reset_session()
+            return {"status": "error", "message": f"Historical data fetch nahi hua: {str(e)}"}
+
+    if closing_price is None:
+        return {"status": "error", "message": "Expiry date ka closing data nahi mila. Expiry/CMP Price manually daalein."}
+
+    # Calculate Intrinsic Value at expiry
     if option_type == "CE":
-        intrinsic_val = max(0.0, expiry_price - strike)
+        intrinsic_val = max(0.0, closing_price - strike)
     else:
-        intrinsic_val = max(0.0, strike - expiry_price)
+        intrinsic_val = max(0.0, strike - closing_price)
 
     pnl_per_share = entry_premium - intrinsic_val
     total_pnl = round(pnl_per_share * lot_size, 2)
@@ -263,10 +295,11 @@ def calculate_pnl(data: dict, x_key: str = Header(default="")):
 
     return {
         "status": "success",
+        "symbol": symbol,
         "strike": strike,
         "entry_premium": entry_premium,
-        "expiry_price": expiry_price,
-        "intrinsic_value": intrinsic_val,
+        "expiry_price": round(closing_price, 2),
+        "intrinsic_value": round(intrinsic_val, 2),
         "pnl_per_share": round(pnl_per_share, 2),
         "total_pnl": total_pnl,
         "roi_pct": roi_pct,
