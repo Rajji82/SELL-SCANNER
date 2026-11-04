@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#14181f">
+<title>Option Sell Scanner</title>
+<style>
+:root{--bg:#eef1f5;--card:#fff;--ink:#1b2330;--mute:#667085;--line:#dde2ea;--ok:#1f7a45;--warn:#b45f06;--accent:#2f4bb8;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#14181f;--card:#1d232d;--ink:#e8ecf3;--mute:#98a2b3;--line:#2c3441;--ok:#4cc38a;--warn:#f0a53c;--accent:#8aa4ff;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif;padding:max(14px,env(safe-area-inset-top)) 14px 40px}
+h1{font-size:20px;margin:0 0 12px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+input,button{font:inherit;border-radius:8px;border:1px solid var(--line);padding:10px 12px;background:var(--card);color:var(--ink)}
+input{flex:1 1 200px}
+button{background:var(--accent);color:#fff;border:0;font-weight:600}
+button:disabled{opacity:.6}
+.sym{margin:18px 0 8px;display:flex;justify-content:space-between;align-items:baseline}
+.sym b{font-size:17px}.mute{color:var(--mute);font-size:13px}
+.warn{color:var(--warn);font-size:13px;margin:4px 0}
+.opt{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:8px}
+.top{display:flex;justify-content:space-between;gap:8px;font-weight:600}
+.pop{height:8px;border-radius:4px;background:var(--line);margin:8px 0;overflow:hidden}
+.pop i{display:block;height:100%;background:var(--ok)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;font-size:13px}
+.grid span{color:var(--mute)}
+.err{color:var(--warn)}
+button#auto{background:var(--ok);color:#fff}
+@media (prefers-color-scheme:dark){button#auto{color:#0b1b12}}
+.note{margin-top:20px;font-size:12px;color:var(--mute)}
+</style>
+</head>
+<body>
+<h1>Option sell scanner</h1>
+<div class="bar">
+  <input id="syms" value="NIFTY,BANKNIFTY,RELIANCE,HDFCBANK" aria-label="Symbols, comma se alag">
+  <button id="go">Scan karo</button>
+  <button id="auto">Auto scan</button>
+</div>
+<div id="out" class="mute">Symbols likhkar "Scan karo" dabao. Stocks mein 1 symbol ~5 second leta hai.</div>
+<p class="note">POP delta se nikala gaya andaaza hai, guarantee nahi. Option selling mein nuksaan asaleel roop se bahut bada ho sakta hai. Stop-loss sirf suggestion hai, ye app order nahi daalta.</p>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let key=localStorage.getItem("key")||"";
+async function scan(){
+  $("go").disabled=true;$("out").textContent="Scan ho raha hai...";
+  try{
+    const r=await fetch("/api/scan?symbols="+encodeURIComponent($("syms").value),{headers:{"x-key":key}});
+    if(r.status===401){key=prompt("App password daalo")||"";localStorage.setItem("key",key);return scan();}
+    render(await r.json());
+  }catch(e){$("out").innerHTML='<span class="err">Server se connect nahi hua. Check karo scanner chal raha hai.</span>';}
+  $("go").disabled=false;
+}
+function card(p){
+  return '<div class="opt"><div class="top"><span>SELL '+esc(p.contract)+' @ '+p.ltp+'</span><span>POP '+p.pop+'%</span></div>'
+  +'<div class="pop"><i style="width:'+p.pop+'%"></i></div><div class="grid">'
+  +'<div><span>Premium/lot </span>₹'+p.premium_lot+'</div><div><span>Lot </span>'+p.lot+'</div>'
+  +'<div><span>Stop-loss </span>'+p.sl_price+'</div><div><span>SL par nuksaan </span>₹'+p.loss_at_sl+'</div>'
+  +'<div><span>Breakeven </span>'+p.breakeven+'</div><div><span>Spot se door </span>'+p.dist_pct+'%</div>'
+  +'<div><span>Delta </span>'+p.delta+'</div><div><span>IV </span>'+esc(p.iv)+'</div>'
+  +'<div><span>OI </span>'+p.oi+'</div><div><span>Spread </span>'+p.spread_pct+'%</div></div></div>';
+}
+function render(d){
+  let h='<div class="mute">Update: '+esc(d.time)+'</div>';
+  for(const s of d.results){
+    if(s.error){h+='<div class="sym"><b>'+esc(s.symbol)+'</b></div><div class="err">'+esc(s.error)+'</div>';continue;}
+    h+='<div class="sym"><b>'+esc(s.symbol)+' '+s.spot+'</b><span class="mute">Expiry '+esc(s.expiry)+' ('+s.days+' din)</span></div>';
+    for(const w of s.warnings)h+='<div class="warn">'+esc(w)+'</div>';
+    if(!s.picks.length)h+='<div class="mute">Filter ke hisaab se koi achha strike nahi mila.</div>';
+    for(const p of s.picks)h+=card(p);
+  }
+  $("out").innerHTML=h;
+}
+$("go").onclick=scan;
+let timer=null;
+async function auto(refresh){
+  clearTimeout(timer);
+  try{
+    const r=await fetch("/api/auto"+(refresh?"?refresh=true":""),{headers:{"x-key":key}});
+    if(r.status===401){key=prompt("App password daalo")||"";localStorage.setItem("key",key);return auto(refresh);}
+    const d=await r.json();renderAuto(d);
+    if(d.running)timer=setTimeout(()=>auto(false),4000);
+  }catch(e){$("out").innerHTML='<span class="err">Server se connect nahi hua. Check karo scanner chal raha hai.</span>';}
+}
+function renderAuto(d){
+  let h='<div class="mute">'+(d.running?'Scan chal raha hai: '+d.done+'/'+d.total+' symbol (zyada se zyada 3-4 minute)':'Poora hua: '+esc(d.updated||'-'))+'</div>';
+  if(d.errors.length)h+='<div class="warn">'+d.errors.length+' symbol skip hue: '+esc(d.errors.slice(0,2).join("; "))+'</div>';
+  if(!d.picks.length&&!d.running)h+='<div class="mute">Filter ke hisaab se koi achha mauka nahi mila.</div>';
+  for(const p of d.picks){
+    h+='<div class="sym"><b>'+esc(p.symbol)+' '+p.spot+'</b><span class="mute">Expiry '+esc(p.expiry)+' ('+p.days+' din)</span></div>';
+    for(const w of p.warnings)h+='<div class="warn">'+esc(w)+'</div>';
+    h+=card(p);
+  }
+  $("out").innerHTML=h;
+}
+$("auto").onclick=()=>auto(true);
+
+</script>
+</body>
+</html>

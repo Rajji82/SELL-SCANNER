@@ -1,0 +1,241 @@
+"""Option-selling scanner (Angel One SmartAPI). Sirf suggestion deta hai, order NAHI daalta."""
+import os, time, threading, datetime as dt
+import requests, pyotp
+from SmartApi import SmartConnect
+from dotenv import load_dotenv
+from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
+
+load_dotenv()
+API_KEY = os.environ["ANGEL_API_KEY"]
+CLIENT = os.environ["ANGEL_CLIENT_ID"]
+PIN = os.environ["ANGEL_PIN"]
+TOTP_SECRET = os.environ["ANGEL_TOTP_SECRET"]
+APP_TOKEN = os.getenv("APP_TOKEN", "")  # app kholte waqt ye password maangega
+
+# ---- Filters (apne hisaab se badlo) ----
+DELTA_MIN, DELTA_MAX = 0.10, 0.25   # |delta| band => POP lagbhag 75%-90%
+MAX_SPREAD_PCT = 5.0                # bid-ask spread % se zyada ho to hatao
+MIN_OI, MIN_VOL = 1000, 100         # lot nahi, contracts ka OI/volume
+SL_MULTIPLE = 2.0                   # stop-loss = premium ka 2 guna
+# Results/event ki date yahan likho, jaise {"TCS": "2026-01-09"}. Expiry se pehle ho to warning aayegi.
+EVENTS = {}
+
+MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+INDEX_TOKENS = {"NIFTY": "99926000", "BANKNIFTY": "99926009"}
+
+_lock = threading.Lock()
+_api = None
+_master = {"day": None, "rows": []}
+
+
+def api():
+    global _api
+    with _lock:
+        if _api is None:
+            o = SmartConnect(api_key=API_KEY)
+            r = o.generateSession(CLIENT, PIN, pyotp.TOTP(TOTP_SECRET).now())
+            if not r.get("status"):
+                raise RuntimeError(f"Login fail: {r.get('message')}")
+            _api = o
+        return _api
+
+
+def reset_session():
+    global _api
+    with _lock:
+        _api = None
+
+
+def master():
+    today = dt.date.today()
+    if _master["day"] != today:
+        raw = requests.get(MASTER_URL, timeout=90).json()
+        _master["rows"] = [
+            r for r in raw
+            if (r["exch_seg"] == "NFO" and r["instrumenttype"] in ("OPTSTK", "OPTIDX"))
+            or (r["exch_seg"] == "NSE" and r["symbol"].endswith("-EQ"))
+        ]
+        _master["day"] = today
+    return _master["rows"]
+
+
+def parse_date(s):
+    return dt.datetime.strptime(s.title(), "%d%b%Y").date()
+
+
+def pick_expiry(rows, sym, min_days):
+    exps = sorted({parse_date(r["expiry"]) for r in rows if r["exch_seg"] == "NFO" and r["name"] == sym})
+    ok = [e for e in exps if (e - dt.date.today()).days >= min_days]
+    return ok[0] if ok else None
+
+
+def get_spot(a, rows, sym):
+    if sym in INDEX_TOKENS:
+        tok = INDEX_TOKENS[sym]
+    else:
+        m = [r for r in rows if r["exch_seg"] == "NSE" and r["name"] == sym and r["symbol"].endswith("-EQ")]
+        if not m:
+            raise ValueError("stock ka NSE token nahi mila")
+        tok = m[0]["token"]
+    d = a.getMarketData("LTP", {"NSE": [tok]})
+    return float(d["data"]["fetched"][0]["ltp"])
+
+
+def scan_symbol(sym, min_days=3):
+    a, rows = api(), master()
+    exp = pick_expiry(rows, sym, min_days)
+    if not exp:
+        return {"symbol": sym, "error": "expiry nahi mili (symbol sahi hai?)"}
+    es = exp.strftime("%d%b%Y").upper()
+    spot = get_spot(a, rows, sym)
+    time.sleep(1.1)  # API rate limit
+
+    greeks = a.optionGreek({"name": sym, "expirydate": es}).get("data") or []
+    tokens = {}
+    for r in rows:
+        if r["exch_seg"] == "NFO" and r["name"] == sym and r["expiry"].upper() == es:
+            tokens[(round(float(r["strike"]) / 100, 2), r["symbol"][-2:])] = r
+
+    cand = []
+    for g in greeks:
+        d = abs(float(g["delta"]))
+        if DELTA_MIN <= d <= DELTA_MAX:
+            m = tokens.get((round(float(g["strikePrice"]), 2), g["optionType"]))
+            if m:
+                cand.append((g, d, m))
+
+    quotes = {}
+    for i in range(0, len(cand), 50):
+        part = cand[i:i + 50]
+        r = a.getMarketData("FULL", {"NFO": [m["token"] for _, _, m in part]})
+        for f in (r.get("data") or {}).get("fetched", []):
+            quotes[f["symbolToken"]] = f
+        time.sleep(1.1)
+
+    warn = []
+    ev = EVENTS.get(sym)
+    if ev and dt.date.fromisoformat(ev) <= exp:
+        warn.append(f"Event {ev} expiry se pehle hai: gap-risk zyada")
+
+    picks = []
+    for g, d, m in cand:
+        f = quotes.get(m["token"])
+        if not f:
+            continue
+        ltp = float(f.get("ltp") or 0)
+        oi = int(f.get("opnInterest") or 0)
+        vol = int(f.get("tradeVolume") or 0)
+        dep = f.get("depth") or {}
+        bid = float(((dep.get("buy") or [{}])[0]).get("price") or 0)
+        ask = float(((dep.get("sell") or [{}])[0]).get("price") or 0)
+        if ltp <= 0 or bid <= 0 or ask <= 0:
+            continue
+        spread = (ask - bid) / ((ask + bid) / 2) * 100
+        if spread > MAX_SPREAD_PCT or oi < MIN_OI or vol < MIN_VOL:
+            continue
+        k, typ, lot = float(g["strikePrice"]), g["optionType"], int(m["lotsize"])
+        pop = (1 - d) * 100  # delta se approx; guarantee nahi
+        prem_pct = ltp / spot * 100
+        picks.append({
+            "contract": f"{sym} {k:g} {typ}", "type": typ, "strike": k, "ltp": round(ltp, 2),
+            "pop": round(pop, 1), "delta": round(d, 2), "iv": round(float(g.get("impliedVolatility") or 0), 1),
+            "dist_pct": round(abs(k - spot) / spot * 100, 2),
+            "lot": lot, "premium_lot": round(ltp * lot, 2),
+            "sl_price": round(ltp * SL_MULTIPLE, 2),
+            "loss_at_sl": round(ltp * (SL_MULTIPLE - 1) * lot, 2),
+            "breakeven": round(k - ltp if typ == "PE" else k + ltp, 2),
+            "oi": oi, "vol": vol, "spread_pct": round(spread, 2),
+            "score": round(pop / 100 * prem_pct, 3),
+        })
+    picks.sort(key=lambda p: p["score"], reverse=True)
+    return {"symbol": sym, "spot": spot, "expiry": exp.isoformat(), "days": (exp - dt.date.today()).days,
+            "warnings": warn, "picks": picks[:8]}
+
+
+app = FastAPI()
+
+
+@app.get("/api/scan")
+def scan(symbols: str = "NIFTY,BANKNIFTY", min_days: int = 3, x_key: str = Header(default="")):
+    if APP_TOKEN and x_key != APP_TOKEN:
+        raise HTTPException(401, "galat password")
+    out = []
+    for sym in [s.strip().upper() for s in symbols.split(",") if s.strip()][:10]:
+        try:
+            with _scan_lock:
+                out.append(scan_symbol(sym, min_days))
+        except Exception as e:  # session expire ho gaya ho to agli baar fresh login
+            reset_session()
+            out.append({"symbol": sym, "error": str(e)[:200]})
+    return {"time": dt.datetime.now().strftime("%H:%M:%S"), "results": out}
+
+
+@app.get("/")
+def home():
+    return FileResponse(os.path.join(os.path.dirname(__file__), "index.html"))
+
+
+# ---------------- Auto scan: F&O ke sabse zyada trade hone wale stocks khud dhoondho ----------------
+AUTO_TOP_N = int(os.getenv("AUTO_TOP_N", "20"))
+_scan_lock = threading.Lock()
+_auto_lock = threading.Lock()
+_auto = {"running": False, "done": 0, "total": 0, "updated": None, "ts": None, "picks": [], "errors": []}
+
+
+def fno_universe(top_n):
+    """F&O wale sab stocks ka aaj ka traded value (bhav x volume) nikaal ke top N chuno."""
+    a, rows = api(), master()
+    names = {r["name"] for r in rows if r["exch_seg"] == "NFO" and r["instrumenttype"] == "OPTSTK"}
+    eq = {r["name"]: r["token"] for r in rows
+          if r["exch_seg"] == "NSE" and r["symbol"].endswith("-EQ") and r["name"] in names}
+    inv = {t: n for n, t in eq.items()}
+    toks, vals = list(eq.values()), []
+    for i in range(0, len(toks), 50):
+        r = a.getMarketData("FULL", {"NSE": toks[i:i + 50]})
+        for f in (r.get("data") or {}).get("fetched", []):
+            n = inv.get(f["symbolToken"])
+            if n:
+                vals.append((float(f.get("ltp") or 0) * float(f.get("tradeVolume") or 0), n))
+        time.sleep(1.1)
+    vals.sort(reverse=True)
+    return [n for _, n in vals[:top_n]]
+
+
+def _auto_run():
+    try:
+        syms = ["NIFTY", "BANKNIFTY"] + fno_universe(AUTO_TOP_N)
+        _auto.update(total=len(syms), done=0, picks=[], errors=[])
+        allp = []
+        for s in syms:
+            try:
+                with _scan_lock:
+                    r = scan_symbol(s)
+                if r.get("error"):
+                    _auto["errors"].append(f"{s}: {r['error']}")
+                for p in r.get("picks", [])[:3]:
+                    allp.append({**p, "symbol": s, "spot": r["spot"], "expiry": r["expiry"],
+                                 "days": r["days"], "warnings": r["warnings"]})
+            except Exception as e:
+                reset_session()
+                _auto["errors"].append(f"{s}: {str(e)[:80]}")
+            _auto["done"] += 1
+            _auto["picks"] = sorted(allp, key=lambda p: p["score"], reverse=True)[:25]
+        _auto["updated"] = dt.datetime.now().strftime("%d-%b %H:%M:%S")
+    except Exception as e:
+        reset_session()
+        _auto["errors"].append(str(e)[:150])
+    finally:
+        _auto["running"] = False
+
+
+@app.get("/api/auto")
+def auto(refresh: bool = False, x_key: str = Header(default="")):
+    if APP_TOKEN and x_key != APP_TOKEN:
+        raise HTTPException(401, "galat password")
+    with _auto_lock:
+        old = _auto["ts"] is None or time.time() - _auto["ts"] > 900
+        if not _auto["running"] and (refresh or old):
+            _auto.update(running=True, ts=time.time())
+            threading.Thread(target=_auto_run, daemon=True).start()
+    return {k: _auto[k] for k in ("running", "done", "total", "updated", "picks", "errors")}
