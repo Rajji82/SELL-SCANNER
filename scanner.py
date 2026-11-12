@@ -1,5 +1,6 @@
 """Option-selling scanner (Angel One SmartAPI) with Paper Trading, Time Exit, Trailing SL, Spreads & News."""
 import os, time, threading, math, datetime as dt, urllib.parse
+from zoneinfo import ZoneInfo
 import xml.etree.ElementTree as ET
 import requests, pyotp
 from SmartApi import SmartConnect
@@ -31,9 +32,15 @@ _historical_cache = {}
 _news_cache = {}
 
 # Bot State with Paper Trading, Trailing SL & Time Exit
-_bot_lock = threading.Lock()
+_bot_lock = threading.RLock()
+MARKET_TZ = ZoneInfo('Asia/Kolkata')
+PAPER_DAILY_LOSS = 6000
 _bot_state = {
     "enabled": False,
+    "auto_entry": False,
+    "last_auto_scan": 0.0,
+    "seen_contracts": set(),
+    "entry_day": None,
     "paper_mode": True,
     "target_profit": 1500.0,
     "max_loss": 3000.0,
@@ -364,7 +371,7 @@ def _bot_monitor_loop():
     while True:
         time.sleep(3)
         with _bot_lock:
-            if not _bot_state["enabled"] or not _bot_state["active_trade"]:
+            if not _bot_state["active_trade"]:
                 continue
             tr = _bot_state["active_trade"]
 
@@ -389,37 +396,37 @@ def _bot_monitor_loop():
 
             # 3. Check Target Hit
             if current_pnl >= _bot_state["target_profit"]:
-                _close_active_trade(reason=f"TARGET_HIT (+₹{current_pnl})")
+                _close_active_trade(reason=f"TARGET_HIT (+₹{current_pnl})", expected=tr)
                 continue
 
             # 4. Check Stop-Loss Hit
             if curr_ltp >= tr["sl_price"]:
-                _close_active_trade(reason=f"SL_HIT (₹{curr_ltp} >= ₹{tr['sl_price']}, Loss: ₹{current_pnl})")
+                _close_active_trade(reason=f"SL_HIT (₹{curr_ltp} >= ₹{tr['sl_price']}, Loss: ₹{current_pnl})", expected=tr)
                 continue
 
             # 5. Check Time-based Auto Exit (3:20 PM)
-            now_time = dt.datetime.now().strftime("%H:%M")
+            now_time = dt.datetime.now(MARKET_TZ).strftime("%H:%M")
             if now_time >= _bot_state["time_exit"]:
-                _close_active_trade(reason=f"TIME_EXIT ({_bot_state['time_exit']} PM auto square-off, PnL: ₹{current_pnl})")
+                _close_active_trade(reason=f"TIME_EXIT ({_bot_state['time_exit']} PM auto square-off, PnL: ₹{current_pnl})", expected=tr)
                 continue
 
         except Exception as e:
             time.sleep(2)
 
 
-def _close_active_trade(reason="MANUAL"):
+def _close_active_trade(reason="MANUAL", expected=None):
     with _bot_lock:
         tr = _bot_state["active_trade"]
-        if not tr:
+        if not tr or (expected is not None and tr is not expected):
             return
-        tr["exit_time"] = dt.datetime.now().strftime("%H:%M:%S")
+        tr["exit_time"] = dt.datetime.now(MARKET_TZ).strftime("%H:%M:%S")
+        tr["exit_day"] = dt.datetime.now(MARKET_TZ).date().isoformat()
         tr["reason"] = reason
         _bot_state["history"].insert(0, tr)
         _bot_state["active_trade"] = None
         log_bot(f"🚪 Trade Closed: {tr['contract']} | Reason: {reason}")
 
 
-threading.Thread(target=_bot_monitor_loop, daemon=True).start()
 
 
 app = FastAPI()
@@ -514,7 +521,7 @@ def bot_status(x_key: str = Header(default="")):
     if APP_TOKEN and x_key != APP_TOKEN:
         raise HTTPException(401, "galat password")
     with _bot_lock:
-        return _bot_state
+        return {k: v for k, v in _bot_state.items() if k != "seen_contracts"}
 
 
 class BotSettings(BaseModel):
@@ -523,6 +530,7 @@ class BotSettings(BaseModel):
     target_profit: float
     trail_trigger: float
     time_exit: str
+    auto_entry: bool = False
 
 
 @app.post("/api/bot/settings")
@@ -531,39 +539,77 @@ def update_bot_settings(s: BotSettings, x_key: str = Header(default="")):
         raise HTTPException(401, "galat password")
     with _bot_lock:
         _bot_state["enabled"] = s.enabled
-        _bot_state["paper_mode"] = s.paper_mode
+        _bot_state["paper_mode"] = True
+        _bot_state["auto_entry"] = s.auto_entry
         _bot_state["target_profit"] = s.target_profit
         _bot_state["trail_trigger"] = s.trail_trigger
         _bot_state["time_exit"] = s.time_exit
         log_bot(f"⚙️ Settings updated: PaperMode={s.paper_mode}, Target=₹{s.target_profit}, Trail=₹{s.trail_trigger}, Exit={s.time_exit}")
-    return {"status": "success", "settings": _bot_state}
+    return {"status": "success", "settings": {k: v for k, v in _bot_state.items() if k != "seen_contracts"}}
 
 
 @app.post("/api/bot/execute")
 def execute_trade_pick(pick: dict, x_key: str = Header(default="")):
     if APP_TOKEN and x_key != APP_TOKEN:
         raise HTTPException(401, "galat password")
+    return _open_paper_trade(pick)
+
+
+def _open_paper_trade(pick, automatic=False):
+    try:
+        entry, stop = float(pick["ltp"]), float(pick["sl_price"])
+        quantity = int(pick["lot"])
+        contract, token, symbol = (str(pick[k]) for k in ("contract", "token", "symbol"))
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return {"status": "error", "message": "Invalid paper trade"}
+    if not (math.isfinite(entry) and math.isfinite(stop) and 0 < entry < stop and quantity > 0):
+        return {"status": "error", "message": "Invalid premium, stop or lot size"}
     with _bot_lock:
+        now = dt.datetime.now(MARKET_TZ)
+        day = now.date().isoformat()
         if _bot_state["active_trade"]:
-            return {"status": "error", "message": "Pehle se 1 active trade chal raha hai!"}
-        
-        trade = {
-            "contract": pick["contract"],
-            "token": pick["token"],
-            "symbol": pick["symbol"],
-            "entry_price": float(pick["ltp"]),
-            "current_ltp": float(pick["ltp"]),
-            "lot_size": int(pick["lot"]),
-            "sl_price": float(pick["sl_price"]),
-            "trailed": False,
-            "entry_time": dt.datetime.now().strftime("%H:%M:%S"),
-            "paper": _bot_state["paper_mode"],
-            "current_pnl": 0.0
-        }
+            return {"status": "error", "message": "A paper trade is already open"}
+        if _bot_state["entry_day"] != day:
+            _bot_state.update(entry_day=day, seen_contracts=set())
+        pnl = sum(t["current_pnl"] for t in _bot_state["history"] if t.get("exit_day") == day)
+        remaining = PAPER_DAILY_LOSS + min(0, pnl)
+        if (stop - entry) * quantity > min(_bot_state["max_loss"], remaining):
+            return {"status": "error", "message": "Paper trade exceeds available risk budget"}
+        if automatic and (not _paper_entry_allowed(now) or contract in _bot_state["seen_contracts"]):
+            return {"status": "error", "message": "Automatic entry unavailable"}
+        trade = dict(contract=contract, token=token, symbol=symbol, entry_price=entry,
+                     current_ltp=entry, lot_size=quantity, sl_price=stop, trailed=False,
+                     entry_time=now.strftime("%H:%M:%S"), paper=True, current_pnl=0.0)
         _bot_state["active_trade"] = trade
-        mode_str = "📄 [PAPER TRADE]" if _bot_state["paper_mode"] else "⚡ [REAL ORDER]"
-        log_bot(f"{mode_str} Entered {trade['contract']} @ ₹{trade['entry_price']} | SL: ₹{trade['sl_price']}")
-    return {"status": "success", "trade": trade}
+        _bot_state["seen_contracts"].add(contract)
+        log_bot(f"Paper trade opened: {contract} @ ₹{entry}")
+        return {"status": "success", "trade": trade}
+
+
+def _paper_entry_allowed(now):
+    cutoff = min("15:20", _bot_state["time_exit"])
+    return (APP_TOKEN and _bot_state["enabled"] and _bot_state["auto_entry"]
+            and now.weekday() < 5 and "09:15" <= now.strftime("%H:%M") < cutoff)
+
+
+def _paper_entry_loop():
+    while True:
+        time.sleep(5)
+        with _bot_lock:
+            if not _paper_entry_allowed(dt.datetime.now(MARKET_TZ)) or _bot_state["active_trade"]:
+                continue
+            if time.monotonic() - _bot_state["last_auto_scan"] < 60:
+                continue
+            _bot_state["last_auto_scan"] = time.monotonic()
+        try:
+            with _scan_lock:
+                result = scan_symbol("NIFTY")
+            for pick in result.get("picks", []):
+                if _open_paper_trade({**pick, "symbol": "NIFTY"}, automatic=True)["status"] == "success":
+                    break
+        except Exception:
+            reset_session()
+            log_bot("Paper auto-entry scan failed")
 
 
 @app.post("/api/bot/close")
@@ -636,3 +682,9 @@ def calculate_pnl(data: dict, x_key: str = Header(default="")):
         "roi_pct": roi_pct,
         "verdict": "PROFIT" if total_pnl >= 0 else "LOSS"
     }
+
+
+@app.on_event("startup")
+def start_paper_threads():
+    threading.Thread(target=_bot_monitor_loop, daemon=True).start()
+    threading.Thread(target=_paper_entry_loop, daemon=True).start()
