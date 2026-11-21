@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from stock_signals import IST, signal_from_candles
 
 load_dotenv()
 API_KEY = os.environ.get("ANGEL_API_KEY", "")
@@ -438,6 +439,47 @@ def scan(symbols: str = "NIFTY,BANKNIFTY", min_days: int = 3, x_key: str = Heade
             reset_session()
             out.append({"symbol": sym, "error": str(e)[:200]})
     return {"time": dt.datetime.now().strftime("%H:%M:%S"), "results": out}
+
+
+@app.get("/api/stock-signals")
+def stock_signals(symbols: str = "RELIANCE,SBIN,INFY", x_key: str = Header(default="")):
+    if not APP_TOKEN:
+        raise HTTPException(503, "Scanner access token is not configured")
+    if x_key != APP_TOKEN:
+        raise HTTPException(401, "Invalid scanner access token")
+
+    selected = list(dict.fromkeys(part.strip().upper() for part in symbols.split(",") if part.strip()))
+    if not 1 <= len(selected) <= 10 or any(len(sym) > 30 for sym in selected):
+        raise HTTPException(422, "Supply 1 to 10 stock symbols")
+
+    now = dt.datetime.now(IST)
+    start = now - dt.timedelta(days=10)
+    results = []
+    for symbol in selected:
+        result = {"symbol": symbol, "interval": "5 min"}
+        try:
+            with _scan_lock:
+                token, exchange = get_token_for_symbol(master(), symbol)
+                payload = api().getCandleData({
+                    "exchange": exchange,
+                    "symboltoken": token,
+                    "interval": "FIVE_MINUTE",
+                    "fromdate": start.strftime("%Y-%m-%d %H:%M"),
+                    "todate": now.strftime("%Y-%m-%d %H:%M"),
+                })
+                time.sleep(1.1)
+            if not payload.get("status"):
+                result.update(signal="UNAVAILABLE", status="Candle provider rejected request")
+            else:
+                result.update(signal_from_candles(payload.get("data") or [], now))
+        except ValueError:
+            result.update(signal="UNAVAILABLE", status="Invalid symbol or candle data")
+        except Exception:
+            reset_session()
+            result.update(signal="UNAVAILABLE", status="Could not fetch candles")
+        results.append(result)
+
+    return {"as_of_ist": now.isoformat(timespec="seconds"), "results": results}
 
 
 @app.get("/")
