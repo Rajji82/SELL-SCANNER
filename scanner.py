@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from stock_signals import IST, signal_from_candles
+from stock_signals import IST, daily_signal_history, signal_from_candles
 
 load_dotenv()
 API_KEY = os.environ.get("ANGEL_API_KEY", "")
@@ -445,6 +445,7 @@ def scan(symbols: str = "NIFTY,BANKNIFTY", min_days: int = 3, x_key: str = Heade
 def stock_signals(
     symbols: str = "RELIANCE,SBIN,INFY",
     interval: int = 5,
+    report_days: int = 0,
     x_key: str = Header(default=""),
 ):
     if not APP_TOKEN:
@@ -460,8 +461,12 @@ def stock_signals(
     if interval not in candle_intervals:
         raise HTTPException(422, "Interval must be 5 or 15 minutes")
 
+    if report_days < 0 or report_days > 30 or (report_days and interval != 15):
+        raise HTTPException(422, "Reports require a 15-minute interval and up to 30 days")
+
     now = dt.datetime.now(IST)
-    start = now - dt.timedelta(days=20 if interval == 15 else 10)
+    lookback_days = 20 + report_days if report_days else (20 if interval == 15 else 10)
+    start = now - dt.timedelta(days=lookback_days)
     results = []
     for symbol in selected:
         result = {"symbol": symbol, "interval": f"{interval} min"}
@@ -478,6 +483,12 @@ def stock_signals(
                 time.sleep(1.1)
             if not payload.get("status"):
                 result.update(signal="UNAVAILABLE", status="Candle provider rejected request")
+            elif report_days:
+                history = daily_signal_history(payload.get("data") or [], now, report_days)
+                if history is None:
+                    result.update(signal="UNAVAILABLE", status="Insufficient closed candles")
+                else:
+                    result.update(history=history, status="OK")
             else:
                 result.update(signal_from_candles(payload.get("data") or [], now, interval))
         except ValueError:
