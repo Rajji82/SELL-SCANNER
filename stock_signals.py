@@ -1,16 +1,16 @@
-"""Closed NSE five-minute candles and EMA20 crossover signals for Excel."""
+"""Closed NSE intraday candles and EMA20 crossover signals for Excel."""
 
 import datetime as dt
 import math
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
-INTERVAL = dt.timedelta(minutes=5)
 ALPHA = 2 / 21
 MIN_BARS = 100
 
 
-def signal_from_candles(candles, now):
+def signal_from_candles(candles, now, minutes=5):
     """Ignore open bars and require consecutive bars for an entry/exit alert."""
+    interval = dt.timedelta(minutes=minutes)
     by_start = {}
     for candle in candles:
         try:
@@ -19,7 +19,7 @@ def signal_from_candles(candles, now):
             close = float(candle[4])
         except (IndexError, TypeError, ValueError):
             continue
-        if start + INTERVAL <= now and math.isfinite(close) and close > 0:
+        if start + interval <= now and math.isfinite(close) and close > 0:
             by_start[start] = close
 
     bars = sorted(by_start.items())
@@ -33,12 +33,12 @@ def signal_from_candles(candles, now):
         ema += ALPHA * (price - ema)
 
     current_ema = ema + ALPHA * (close - ema)
-    ended = start + INTERVAL
+    ended = start + interval
     signal = "WAIT"
     status = "OK"
-    if now - ended >= INTERVAL:
+    if now - ended >= interval:
         signal, status = "STALE", "No recent closed candle"
-    elif start - previous_start != INTERVAL:
+    elif start - previous_start != interval:
         signal, status = "NEED DATA", "Previous consecutive candle missing"
     elif previous_close <= ema and close > current_ema:
         signal = "BUY"

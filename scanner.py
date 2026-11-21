@@ -442,7 +442,11 @@ def scan(symbols: str = "NIFTY,BANKNIFTY", min_days: int = 3, x_key: str = Heade
 
 
 @app.get("/api/stock-signals")
-def stock_signals(symbols: str = "RELIANCE,SBIN,INFY", x_key: str = Header(default="")):
+def stock_signals(
+    symbols: str = "RELIANCE,SBIN,INFY",
+    interval: int = 5,
+    x_key: str = Header(default=""),
+):
     if not APP_TOKEN:
         raise HTTPException(503, "Scanner access token is not configured")
     if x_key != APP_TOKEN:
@@ -452,18 +456,22 @@ def stock_signals(symbols: str = "RELIANCE,SBIN,INFY", x_key: str = Header(defau
     if not 1 <= len(selected) <= 10 or any(len(sym) > 30 for sym in selected):
         raise HTTPException(422, "Supply 1 to 10 stock symbols")
 
+    candle_intervals = {5: "FIVE_MINUTE", 15: "FIFTEEN_MINUTE"}
+    if interval not in candle_intervals:
+        raise HTTPException(422, "Interval must be 5 or 15 minutes")
+
     now = dt.datetime.now(IST)
-    start = now - dt.timedelta(days=10)
+    start = now - dt.timedelta(days=20 if interval == 15 else 10)
     results = []
     for symbol in selected:
-        result = {"symbol": symbol, "interval": "5 min"}
+        result = {"symbol": symbol, "interval": f"{interval} min"}
         try:
             with _scan_lock:
                 token, exchange = get_token_for_symbol(master(), symbol)
                 payload = api().getCandleData({
                     "exchange": exchange,
                     "symboltoken": token,
-                    "interval": "FIVE_MINUTE",
+                    "interval": candle_intervals[interval],
                     "fromdate": start.strftime("%Y-%m-%d %H:%M"),
                     "todate": now.strftime("%Y-%m-%d %H:%M"),
                 })
@@ -471,7 +479,7 @@ def stock_signals(symbols: str = "RELIANCE,SBIN,INFY", x_key: str = Header(defau
             if not payload.get("status"):
                 result.update(signal="UNAVAILABLE", status="Candle provider rejected request")
             else:
-                result.update(signal_from_candles(payload.get("data") or [], now))
+                result.update(signal_from_candles(payload.get("data") or [], now, interval))
         except ValueError:
             result.update(signal="UNAVAILABLE", status="Invalid symbol or candle data")
         except Exception:
